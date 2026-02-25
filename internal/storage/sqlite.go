@@ -105,7 +105,13 @@ func (s *SQLiteStore) UpdateImage(filename string, image *models.Image) error {
 }
 
 func (s *SQLiteStore) DeleteImage(filename string) error {
-	return s.db.Unscoped().Where("filename = ?", filename).Delete(&models.Image{}).Error
+	var image models.Image
+	if err := s.db.Where("filename = ?", filename).First(&image).Error; err != nil {
+		return err
+	}
+	s.db.Unscoped().Where("image_id = ?", image.ID).Delete(&models.CustomFile{})
+	s.db.Unscoped().Where("image_id = ?", image.ID).Delete(&models.BootLog{})
+	return s.db.Unscoped().Delete(&image).Error
 }
 
 func (s *SQLiteStore) AssignImagesToClient(mac string, imageFilenames []string) error {
