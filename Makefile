@@ -1,7 +1,7 @@
 .PHONY: help build build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64 build-windows-amd64 run push clean
 
 DOCKER_USER ?= garybowers
-VERSION ?= $(shell git describe --tags --always --dirty)
+VERSION ?= $(shell cat VERSION)
 LDFLAGS := -w -s -X bootimus/internal/server.Version=$(VERSION)
 
 # Default target
