@@ -189,41 +189,59 @@ MikroTik routers are popular for network booting due to their flexibility and pe
 
 ### Via Web Interface (WebFig)
 
-1. Navigate to **IP > DHCP Server > Networks**
-2. Double-click your network
-3. Set **Next Server**: `192.168.1.10`
-4. Set **Boot File Name**: `undionly.kpxe` (BIOS) or `ipxe.efi` (UEFI)
-5. Click **OK**
+#### 1. Define DHCP Options
+* Navigate to **IP** > **DHCP Server** > **Options**.
+* Click **Add New** for each of the following (ensure the **Value** includes **single quotes**):
+    * **Option 66 (Server)**: Name: `tftp-server` | Code: `66` | Value: `'<BOOT_SERVER_IP>'`.
+    * **Option 67 (BIOS)**: Name: `boot-bios` | Code: `67` | Value: `'undionly.kpxe'`.
+    * **Option 67 (UEFI)**: Name: `boot-uefi` | Code: `67` | Value: `'ipxe.efi'`.
 
-### Via CLI
+#### 2. Create Option Sets
+* Navigate to **IP** > **DHCP Server** > **Option Sets**.
+* **BIOS Set**: Click **Add New**, Name: `set-bios`, then add `tftp-server` and `boot-bios`.
+* **UEFI Set**: Click **Add New**, Name: `set-uefi`, then add `tftp-server` and `boot-uefi`.
+
+#### 3. Configure Option Matcher (Detection Logic)
+* Navigate to **IP** > **DHCP Server** > **Option Matcher**.
+* **BIOS Entry**: Name: `match-bios` | Code: `93` | Value: `0x0000` | Option Set: `set-bios` | Server: `<DHCP_SERVER_NAME>`.
+* **UEFI Entry**: Name: `match-uefi-7` | Code: `93` | Value: `0x0007` | Option Set: `set-uefi` | Server: `<DHCP_SERVER_NAME>`.
+* **UEFI Alt Entry**: Name: `match-uefi-9` | Code: `93` | Value: `0x0009` | Option Set: `set-uefi` | Server: `<DHCP_SERVER_NAME>`.
+
+#### 4. DHCP Network Configuration
+* Navigate to **IP** > **DHCP Server** > **Networks**.
+* Open the entry for your subnet (e.g., `192.168.88.0/24`).
+* **Next Server**: Enter your `<BOOT_SERVER_IP>`.
+* **Boot File Name**: **LEAVE EMPTY** (The Option Matcher dynamically injects the filename).
+
+---
+
+### Via Command Line (CLI)
+
+
+
+Replace the placeholders `<BOOT_SERVER_IP>`, `<DHCP_SERVER_NAME>`, and `<YOUR_SUBNET>` with your specific details before running.
 
 ```routeros
-# Basic configuration
-/ip dhcp-server network
-set [find] next-server=192.168.1.10 boot-file-name=undionly.kpxe
-
-# Advanced: UEFI and BIOS support with DHCP options
+# 1. Define DHCP Options
 /ip dhcp-server option
-add code=60 name=pxe-client value="'PXEClient'"
-add code=66 name=tftp-server value="'192.168.1.10'"
-add code=67 name=bootfile-bios value="'undionly.kpxe'"
-add code=67 name=bootfile-uefi value="'ipxe.efi'"
+add code=66 name=tftp-server value="'<BOOT_SERVER_IP>'"
+add code=67 name=boot-bios value="'undionly.kpxe'"
+add code=67 name=boot-uefi value="'ipxe.efi'"
 
+# 2. Create Option Sets
+/ip dhcp-server option sets
+add name=set-bios options=tftp-server,boot-bios
+add name=set-uefi options=tftp-server,boot-uefi
+
+# 3. Create Option Matchers for Architecture Detection
+/ip dhcp-server option-matcher
+add code=93 name=match-bios option-set=set-bios server=<DHCP_SERVER_NAME> value=0x0000
+add code=93 name=match-uefi-7 option-set=set-uefi server=<DHCP_SERVER_NAME> value=0x0007
+add code=93 name=match-uefi-9 option-set=set-uefi server=<DHCP_SERVER_NAME> value=0x0009
+
+# 4. Apply to DHCP Network
 /ip dhcp-server network
-set [find] dhcp-option=pxe-client,tftp-server next-server=192.168.1.10
-```
-
-### Advanced: Per-Client Configuration
-
-```routeros
-# Static lease with specific boot file
-/ip dhcp-server lease
-add address=192.168.1.50 mac-address=00:11:22:33:44:55 \
-    server=dhcp1 comment="Lab Server" \
-    dhcp-option=bootfile-uefi
-```
-
-**Note**: MikroTik doesn't natively support iPXE detection. Clients will TFTP boot iPXE, then chain to HTTP automatically via the embedded autoexec.ipxe script.
+set [find address="<YOUR_SUBNET>"] boot-file-name="" next-server=<BOOT_SERVER_IP>
 
 ## Ubiquiti EdgeRouter
 
