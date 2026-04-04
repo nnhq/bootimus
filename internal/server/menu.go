@@ -2,6 +2,7 @@ package server
 
 import (
 	"bootimus/internal/models"
+	"bootimus/internal/tools"
 	"fmt"
 	"log"
 	"net/url"
@@ -10,13 +11,14 @@ import (
 )
 
 type MenuBuilder struct {
-	images     []models.Image
-	groups     []*models.ImageGroup
-	theme      *models.MenuTheme
-	macAddress string
-	serverAddr string
-	httpPort   int
-	groupStack []uint
+	images       []models.Image
+	groups       []*models.ImageGroup
+	theme        *models.MenuTheme
+	macAddress   string
+	serverAddr   string
+	httpPort     int
+	groupStack   []uint
+	enabledTools []tools.EnabledTool
 }
 
 func (s *Server) generateIPXEMenuWithGroups(images []models.Image, macAddress string) string {
@@ -30,13 +32,17 @@ func (s *Server) generateIPXEMenuWithGroups(images []models.Image, macAddress st
 		log.Printf("Warning: Failed to load menu theme: %v", err)
 	}
 
+	serverURL := fmt.Sprintf("http://%s:%d", s.config.ServerAddr, s.config.HTTPPort)
+	enabledTools := s.toolsManager.GetEnabledTools(serverURL)
+
 	mb := &MenuBuilder{
-		images:     images,
-		groups:     groups,
-		theme:      theme,
-		macAddress: macAddress,
-		serverAddr: s.config.ServerAddr,
-		httpPort:   s.config.HTTPPort,
+		images:       images,
+		groups:       groups,
+		theme:        theme,
+		macAddress:   macAddress,
+		serverAddr:   s.config.ServerAddr,
+		httpPort:     s.config.HTTPPort,
+		enabledTools: enabledTools,
 	}
 
 	return mb.Build()
@@ -52,6 +58,16 @@ func (mb *MenuBuilder) Build() string {
 	sb.WriteString(mb.buildFooter())
 
 	return sb.String()
+}
+
+func (mb *MenuBuilder) menuTimeoutMs() int {
+	if mb.theme != nil && mb.theme.MenuTimeout == 0 {
+		return 0
+	}
+	if mb.theme != nil && mb.theme.MenuTimeout > 0 {
+		return mb.theme.MenuTimeout * 1000
+	}
+	return 30000
 }
 
 func (mb *MenuBuilder) menuTitle() string {
@@ -101,6 +117,10 @@ func (mb *MenuBuilder) buildMainMenu() string {
 		}
 	}
 
+	if len(mb.enabledTools) > 0 {
+		sb.WriteString("item tools Tools >>\n")
+	}
+
 	sb.WriteString("item --gap -- Options:\n")
 	sb.WriteString("item shell Drop to iPXE shell\n")
 	sb.WriteString("item reboot Reboot\n")
@@ -111,7 +131,11 @@ func (mb *MenuBuilder) buildMainMenu() string {
 		defaultItem = fmt.Sprintf("iso%d", ungroupedImages[0].ID)
 	}
 
-	sb.WriteString(fmt.Sprintf("choose --default %s --timeout 30000 selected || goto start\n", defaultItem))
+	if t := mb.menuTimeoutMs(); t > 0 {
+		sb.WriteString(fmt.Sprintf("choose --default %s --timeout %d selected || goto start\n", defaultItem, t))
+	} else {
+		sb.WriteString(fmt.Sprintf("choose --default %s selected || goto start\n", defaultItem))
+	}
 	sb.WriteString("goto ${selected}\n\n")
 
 	return sb.String()
@@ -160,7 +184,11 @@ func (mb *MenuBuilder) buildGroupMenus() string {
 		}
 		sb.WriteString("item shell Drop to iPXE shell\n")
 		sb.WriteString("item reboot Reboot\n")
-		sb.WriteString(fmt.Sprintf("choose --timeout 30000 selected || goto group%d\n", group.ID))
+		if timeoutMs := mb.menuTimeoutMs(); timeoutMs > 0 {
+			sb.WriteString(fmt.Sprintf("choose --timeout %d selected || goto group%d\n", timeoutMs, group.ID))
+		} else {
+			sb.WriteString(fmt.Sprintf("choose selected || goto group%d\n", group.ID))
+		}
 		sb.WriteString("goto ${selected}\n\n")
 	}
 
@@ -281,7 +309,45 @@ func (mb *MenuBuilder) buildKernelBootSection(img *models.Image, encodedFilename
 }
 
 func (mb *MenuBuilder) buildFooter() string {
-	return `:shell
+	var sb strings.Builder
+
+	// Tools submenu
+	if len(mb.enabledTools) > 0 {
+		sb.WriteString(":tools\n")
+		sb.WriteString(fmt.Sprintf("menu %s - Tools\n", mb.menuTitle()))
+		for _, t := range mb.enabledTools {
+			sb.WriteString(fmt.Sprintf("item tool-%s %s\n", t.Name, t.DisplayName))
+		}
+		sb.WriteString("item --gap --\n")
+		sb.WriteString("item back << Back to main menu\n")
+		sb.WriteString("choose selected || goto start\n")
+		sb.WriteString("goto ${selected}\n\n")
+
+		sb.WriteString(":back\n")
+		sb.WriteString("goto start\n\n")
+	}
+
+	// Tool boot sections
+	for _, t := range mb.enabledTools {
+		sb.WriteString(fmt.Sprintf(":tool-%s\n", t.Name))
+		sb.WriteString(fmt.Sprintf("echo Booting %s...\n", t.DisplayName))
+
+		switch t.BootMethod {
+		case "chain":
+			sb.WriteString(fmt.Sprintf("chain %s || goto failed\n\n", t.KernelURL))
+		case "memdisk":
+			sb.WriteString(fmt.Sprintf("initrd %s\n", t.KernelURL))
+			sb.WriteString("chain memdisk raw || goto failed\n\n")
+		default: // "kernel"
+			sb.WriteString(fmt.Sprintf("kernel %s %s\n", t.KernelURL, t.BootParams))
+			if t.InitrdURL != "" {
+				sb.WriteString(fmt.Sprintf("initrd %s\n", t.InitrdURL))
+			}
+			sb.WriteString("boot || goto failed\n\n")
+		}
+	}
+
+	sb.WriteString(`:shell
 echo Dropping to iPXE shell...
 shell
 
@@ -292,7 +358,8 @@ reboot
 echo Boot failed, returning to menu in 5 seconds...
 sleep 5
 goto start
-`
+`)
+	return sb.String()
 }
 
 func (mb *MenuBuilder) getRootGroups() []*models.ImageGroup {

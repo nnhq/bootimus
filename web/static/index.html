@@ -137,7 +137,7 @@
 
         /* Sidebar */
         .sidebar {
-            width: 230px; flex-shrink: 0;
+            width: 190px; flex-shrink: 0;
             background: var(--bg-secondary);
             border-right: 1px solid var(--border);
             display: flex; flex-direction: column;
@@ -147,40 +147,42 @@
         .sidebar-nav { flex: 1; padding: 16px 0; }
         .nav-group { margin-bottom: 12px; }
         .nav-group-label {
-            display: block; padding: 8px 24px 6px; font-size: 12px; font-weight: 600;
+            display: block; padding: 8px 16px 6px; font-size: 11px; font-weight: 600;
             color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
         }
         .nav-item {
-            display: flex; align-items: center; gap: 10px;
-            padding: 10px 24px; margin: 2px 10px; border-radius: var(--radius-sm);
-            color: var(--text-secondary); font-size: 15px; font-weight: 500;
-            cursor: pointer; transition: all 0.15s; text-decoration: none; border: none; background: none; width: calc(100% - 20px);
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px; margin: 1px 8px; border-radius: var(--radius-sm);
+            color: var(--text-secondary); font-size: 14px; font-weight: 500;
+            cursor: pointer; transition: all 0.15s; text-decoration: none; border: none; background: none; width: calc(100% - 16px);
             text-align: left;
         }
         .nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
         .nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
 
         /* Main content area */
-        .main-content { flex: 1; min-width: 0; overflow-x: auto; }
+        .main-content { flex: 1; min-width: 0; overflow: hidden; height: calc(100vh - 57px); display: flex; flex-direction: column; }
 
-        .content-area { padding: 28px 32px; }
+        .content-area { padding: 16px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .content-area > .stats { flex-shrink: 0; }
+        .tab-content.active { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        .tab-content.active > .card { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        .card-body { flex-shrink: 0; }
 
         /* Stats row */
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 28px; }
+        .stats { display: flex; gap: 10px; margin-bottom: 12px; }
         .stat-card {
             background: var(--bg-secondary);
-            padding: 20px 24px;
-            border-radius: var(--radius);
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
             box-shadow: var(--shadow);
-            min-width: 0;
-            display: flex; flex-direction: column; gap: 4px;
+            flex: 1;
+            display: flex; flex-direction: column; gap: 2px;
             border: none;
-            transition: box-shadow 0.2s;
         }
-        .stat-card:hover { box-shadow: var(--shadow-md); }
         .stat-card::before { display: none; }
-        .stat-value { font-size: 32px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; line-height: 1.1; }
-        .stat-label { color: var(--text-secondary); font-size: 14px; white-space: nowrap; font-weight: 500; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); line-height: 1.1; }
+        .stat-label { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 
         /* Hide old tabs - navigation is in sidebar now */
         .tabs { display: none; }
@@ -190,20 +192,28 @@
         /* Cards - white, subtle shadow, NO border */
         .card {
             background: var(--bg-secondary);
-            padding: 28px; border-radius: var(--radius);
-            margin-bottom: 20px;
+            border-radius: var(--radius);
+            margin-bottom: 12px;
             box-shadow: var(--shadow);
             border: none;
+            padding: 0;
+            overflow: hidden;
         }
-        .card h2 { color: var(--text-primary); margin-bottom: 20px; font-size: 18px; font-weight: 600; letter-spacing: -0.2px; }
+        .card h2 { color: var(--text-primary); margin-bottom: 8px; font-size: 16px; font-weight: 600; padding: 12px 12px 0; }
+        .card-body { padding: 12px; padding-top: 0; }
+        .card > h2:first-child { padding-top: 12px; }
+        .card > .loading { padding: 12px; }
+        .card > button, .card > p, .card > form { margin: 0 12px 8px; }
 
         /* Tables */
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+        table { border-collapse: collapse; font-size: 13px; }
+        .table-scroll table { min-width: 100%; width: max-content; }
+        th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
         th {
             background: var(--bg-tertiary); color: var(--text-secondary);
             font-weight: 600; font-size: 11px; text-transform: uppercase;
             letter-spacing: 0.5px; user-select: none;
+            position: sticky; top: 0; z-index: 10;
         }
         th:first-child { border-radius: var(--radius-sm) 0 0 0; }
         th:last-child { border-radius: 0 var(--radius-sm) 0 0; }
@@ -211,7 +221,6 @@
         th[onclick]:hover { background: var(--border); }
         tr:hover { background: var(--bg-tertiary); }
         td:last-child { white-space: nowrap; }
-        table { min-width: 800px; }
 
         /* Buttons */
         .btn {
@@ -407,10 +416,16 @@
         .operations-cell { min-width: 200px; }
         .progress-container { width: 100%; }
 
-        /* Responsive tables */
-        .table-wrapper, #images-table, #clients-table, #users-table, #logs-table {
-            overflow-x: auto; -webkit-overflow-scrolling: touch;
+        /* Table scroll containers */
+        .table-scroll {
+            overflow: auto;
+            flex: 1;
+            scrollbar-width: thin;
         }
+        .table-scroll::-webkit-scrollbar { height: 12px; }
+        .table-scroll::-webkit-scrollbar-track { background: var(--bg-tertiary); }
+        .table-scroll::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 6px; }
+        .table-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 
         @media (max-width: 1200px) {
             .stat-card { gap: 2px; }
@@ -474,6 +489,11 @@
                     <button class="nav-item" data-tab="users"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Users</button>
                 </div>
                 <div class="nav-group">
+                    <span class="nav-group-label">Boot</span>
+                    <button class="nav-item" data-tab="bootloaders"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> Bootloaders</button>
+                    <button class="nav-item" data-tab="tools"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Tools</button>
+                </div>
+                <div class="nav-group">
                     <span class="nav-group-label">System</span>
                     <button class="nav-item" data-tab="settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</button>
                     <button class="nav-item" data-tab="logs"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Logs</button>
@@ -522,6 +542,8 @@
                     <button class="tab" data-tab="groups">Groups</button>
                     <button class="tab" data-tab="public-files">Public Files</button>
                     <button class="tab" data-tab="users">Users</button>
+                    <button class="tab" data-tab="tools">Tools</button>
+                    <button class="tab" data-tab="bootloaders">Bootloaders</button>
                     <button class="tab" data-tab="settings">Settings</button>
                     <button class="tab" data-tab="logs">Logs</button>
                 </div>
@@ -540,8 +562,10 @@
         <!-- Clients Tab -->
         <div id="clients-tab" class="tab-content">
             <div class="card">
-                <h2>Client Management</h2>
-                <button class="btn btn-primary" onclick="showAddClientModal()">+ Add Client</button>
+                <div class="card-body">
+                    <h2>Client Management</h2>
+                    <button class="btn btn-primary" onclick="showAddClientModal()">+ Add Client</button>
+                </div>
                 <div id="clients-table" class="loading">
                     <div class="spinner"></div>
                     Loading clients...
@@ -552,10 +576,12 @@
         <!-- Images Tab -->
         <div id="images-tab" class="tab-content">
             <div class="card">
-                <h2>Image Management</h2>
-                <button class="btn btn-primary" onclick="showUploadModal()">📤 Upload ISO</button>
-                <button class="btn btn-primary" onclick="showDownloadModal()">⬇️ Download ISO</button>
-                <button class="btn btn-success" onclick="scanImages()">🔍 Scan for ISOs</button>
+                <div class="card-body">
+                    <h2>Image Management</h2>
+                    <button class="btn btn-primary" onclick="showUploadModal()">📤 Upload ISO</button>
+                    <button class="btn btn-primary" onclick="showDownloadModal()">⬇️ Download ISO</button>
+                    <button class="btn btn-success" onclick="scanImages()">🔍 Scan for ISOs</button>
+                </div>
                 <div id="images-table" class="loading">
                     <div class="spinner"></div>
                     Loading images...
@@ -566,8 +592,10 @@
         <!-- Groups Tab -->
         <div id="groups-tab" class="tab-content">
             <div class="card">
-                <h2>Image Groups</h2>
-                <button class="btn btn-primary" onclick="showAddGroupModal()">+ Add Group</button>
+                <div class="card-body">
+                    <h2>Image Groups</h2>
+                    <button class="btn btn-primary" onclick="showAddGroupModal()">+ Add Group</button>
+                </div>
                 <div id="groups-table" class="loading">
                     <div class="spinner"></div>
                     Loading groups...
@@ -578,11 +606,11 @@
         <!-- Public Files Tab -->
         <div id="public-files-tab" class="tab-content">
             <div class="card">
-                <h2>Public Files</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">Public files are available to all clients. For image-specific files, go to the Images tab and manage files for each image.</p>
-
-                <button class="btn btn-primary" onclick="showUploadPublicFileModal()">+ Upload Public File</button>
-
+                <div class="card-body">
+                    <h2>Public Files</h2>
+                    <p style="color: var(--text-secondary); margin-bottom: 20px;">Public files are available to all clients. For image-specific files, go to the Images tab and manage files for each image.</p>
+                    <button class="btn btn-primary" onclick="showUploadPublicFileModal()">+ Upload Public File</button>
+                </div>
                 <div id="public-files-table" class="loading">
                     <div class="spinner"></div>
                     <p>Loading files...</p>
@@ -593,11 +621,44 @@
         <!-- Users Tab -->
         <div id="users-tab" class="tab-content">
             <div class="card">
-                <h2>User Management</h2>
-                <button class="btn btn-primary" onclick="showAddUserModal()">+ Add User</button>
+                <div class="card-body">
+                    <h2>User Management</h2>
+                    <button class="btn btn-primary" onclick="showAddUserModal()">+ Add User</button>
+                </div>
                 <div id="users-table" class="loading">
                     <div class="spinner"></div>
                     Loading users...
+                </div>
+            </div>
+        </div>
+
+        <!-- Tools Tab -->
+        <div id="tools-tab" class="tab-content">
+            <div class="card">
+                <h2>Boot Tools</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">
+                    Diagnostic and utility tools available in the PXE boot menu. Download a tool to make it available, then enable it to show in the boot menu.
+                </p>
+                <div id="tools-list" class="loading">
+                    <div class="spinner"></div>
+                    Loading tools...
+                </div>
+            </div>
+        </div>
+
+        <!-- Bootloaders Tab -->
+        <div id="bootloaders-tab" class="tab-content">
+            <div class="card">
+                <div class="card-body">
+                    <h2>Bootloader Management</h2>
+                    <p style="color: var(--text-secondary); margin-bottom: 12px;">
+                        Manage iPXE bootloader sets served to PXE clients. Create custom sets with your own bootloader files, or place them directly in <code>data/bootloaders/&lt;set-name&gt;/</code>.
+                    </p>
+                    <button class="btn btn-primary" onclick="showCreateBootloaderSetModal()">+ Create Set</button>
+                </div>
+                <div id="bootloaders-table" class="loading">
+                    <div class="spinner"></div>
+                    Loading bootloaders...
                 </div>
             </div>
         </div>
@@ -614,6 +675,11 @@
                     <div class="form-group">
                         <label>Menu Title</label>
                         <input type="text" id="theme-title" placeholder="Bootimus - Boot Menu">
+                    </div>
+                    <div class="form-group">
+                        <label>Menu Timeout (seconds)</label>
+                        <input type="number" id="theme-timeout" min="0" value="30" placeholder="30">
+                        <small style="color: var(--text-secondary);">Time before auto-booting the default entry. Set to 0 to disable (wait forever).</small>
                     </div>
                     <div style="display: flex; gap: 10px; margin-top: 10px;">
                         <button type="submit" class="btn btn-primary">Save Theme</button>
@@ -646,7 +712,7 @@
                     <button class="btn btn-sm" onclick="clearLiveLogs()">Clear</button>
                     <span id="log-status" style="margin-left: 10px; color: var(--text-secondary); font-size: 12px;"></span>
                 </div>
-                <div id="live-logs" style="background: var(--bg-primary); padding: 15px; border-radius: 6px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.5;">
+                <div id="live-logs" style="background: #1a1a1a; padding: 16px; border-radius: var(--radius-sm); max-height: 500px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; color: #e0e0e0;">
                     <div style="color: var(--text-secondary);">Click "Refresh Now" to load server logs...</div>
                 </div>
             </div>
@@ -659,6 +725,42 @@
             </div>
             </div>
         </main>
+    </div>
+
+    <!-- Upload Bootloader Modal -->
+    <div id="create-bootloader-set-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create Bootloader Set</h2>
+            </div>
+            <form id="create-bootloader-set-form" onsubmit="createBootloaderSet(event)">
+                <div class="form-group">
+                    <label>Set Name *</label>
+                    <input type="text" id="bootloader-set-name" placeholder="e.g. ipxe-1.21.1" required>
+                    <small style="color: var(--text-secondary);">Creates a directory in <code>data/bootloaders/</code>. Use a descriptive name.</small>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Set</button>
+                <button type="button" class="btn" onclick="closeModal('create-bootloader-set-modal')">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="upload-bootloader-files-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Upload Files to <span id="upload-bl-set-name"></span></h2>
+            </div>
+            <form id="upload-bootloader-files-form" onsubmit="uploadBootloaderFiles(event)">
+                <input type="hidden" id="upload-bl-set-value">
+                <div class="form-group">
+                    <label>Bootloader Files *</label>
+                    <input type="file" id="bootloader-files-upload" multiple required>
+                    <small style="color: var(--text-secondary);">Select one or more iPXE bootloader files (.efi, .kpxe, .usb, etc.).</small>
+                </div>
+                <button type="submit" class="btn btn-primary">Upload</button>
+                <button type="button" class="btn" onclick="closeModal('upload-bootloader-files-modal')">Cancel</button>
+            </form>
+        </div>
     </div>
 
     <!-- Modals -->
@@ -712,11 +814,22 @@
                     <input type="checkbox" name="enabled">
                     <label>Enabled</label>
                 </div>
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" name="show_public_images">
+                    <label>Show public images</label>
+                </div>
+                <div class="form-group">
+                    <label>Bootloader Set</label>
+                    <select name="bootloader_set" id="edit-bootloader-set-select">
+                        <option value="">Default (global setting)</option>
+                    </select>
+                    <small style="color: var(--text-secondary);">Override the global bootloader set for this client.</small>
+                </div>
                 <div class="form-group">
                     <label>Assigned Images</label>
                     <select name="images" multiple size="8" id="edit-images-select">
                     </select>
-                    <small style="color: var(--text-secondary);">Hold Ctrl/Cmd to select multiple</small>
+                    <small style="color: var(--text-secondary);">Hold Ctrl/Cmd to select multiple. Public images are shown separately if enabled above.</small>
                 </div>
                 <button type="submit" class="btn btn-primary">Update Client</button>
                 <button type="button" class="btn" onclick="closeModal('edit-client-modal')">Cancel</button>
@@ -1003,7 +1116,7 @@
                     <label>Download URL</label>
                     <div style="padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px;">
                         <code id="edit-file-url" style="color: var(--text-secondary); word-break: break-all;"></code>
-                        <button type="button" class="btn btn-small" onclick="copyFileURL()" style="margin-left: 10px;">Copy</button>
+                        <button type="button" class="btn btn-sm" onclick="copyFileURL()" style="margin-left: 10px;">Copy</button>
                     </div>
                 </div>
 

@@ -230,6 +230,8 @@ function setupTabs() {
             if (matchingTab) matchingTab.classList.add('active');
 
             if (item.dataset.tab === 'groups') loadGroups();
+            if (item.dataset.tab === 'tools') loadTools();
+            if (item.dataset.tab === 'bootloaders') loadBootloaders();
             if (item.dataset.tab === 'settings') { loadTheme(); loadUSBImages(); }
         });
     });
@@ -468,12 +470,14 @@ function renderClientsTable() {
     }
 
     const html = `
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
                     <th>MAC Address</th>
                     <th>Name</th>
                     <th>Status</th>
+                    <th>Bootloader</th>
                     <th>Assigned Images</th>
                     <th>Boot Count</th>
                     <th>Last Boot</th>
@@ -491,6 +495,12 @@ function renderClientsTable() {
                             </span>
                         </td>
                         <td>
+                            ${client.bootloader_set ?
+                                '<span class="badge badge-info">' + escapeHtml(client.bootloader_set) + '</span>' :
+                                '<span style="color: var(--text-secondary);">Default</span>'
+                            }
+                        </td>
+                        <td>
                             ${(client.images || []).length > 0 ?
                                 `<span title="${(client.images || []).map(i => i.name).join(', ')}">${(client.images || []).length} images</span>` :
                                 '<span style="color: var(--text-secondary);">No images</span>'
@@ -506,6 +516,7 @@ function renderClientsTable() {
                 `).join('')}
             </tbody>
         </table>
+        </div>
     `;
 
     container.innerHTML = html;
@@ -521,11 +532,10 @@ async function editClient(mac) {
         const res = await fetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`);
         const data = await res.json();
 
-        console.log('Edit client API response:', data);
-
+        console.log('GetClient response:', JSON.stringify(data));
         if (data.success) {
             currentClient = data.data;
-            console.log('Current client data:', currentClient);
+            console.log('Client data:', JSON.stringify(currentClient));
 
             const form = document.getElementById('edit-client-form');
 
@@ -534,22 +544,30 @@ async function editClient(mac) {
             form.querySelector('[name="name"]').value = currentClient.name || '';
             form.querySelector('[name="description"]').value = currentClient.description || '';
             form.querySelector('[name="enabled"]').checked = currentClient.enabled || false;
+            form.querySelector('[name="show_public_images"]').checked = currentClient.show_public_images !== false;
 
-            console.log('Form values after setting:', {
-                mac: form.querySelector('[name="mac_address"]').value,
-                name: form.querySelector('[name="name"]').value,
-                description: form.querySelector('[name="description"]').value,
-                enabled: form.querySelector('[name="enabled"]').checked
-            });
+            // Populate bootloader set dropdown
+            try {
+                const blRes = await fetch(`${API_BASE}/bootloaders`);
+                const blData = await blRes.json();
+                const blSelect = document.getElementById('edit-bootloader-set-select');
+                blSelect.innerHTML = '<option value="">Default (global setting)</option>';
+                if (blData.success && blData.data && blData.data.sets) {
+                    for (const set of blData.data.sets) {
+                        const selected = currentClient.bootloader_set === set.name ? 'selected' : '';
+                        blSelect.innerHTML += `<option value="${escapeHtml(set.name)}" ${selected}>${escapeHtml(set.name)}</option>`;
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load bootloader sets:', err);
+            }
 
-            // Populate images select
+            // Populate images select using allowed_images (persisted filename list)
             const select = document.getElementById('edit-images-select');
-            console.log('Current client images:', currentClient.images);
-            console.log('Available images:', images);
+            const allowedImages = currentClient.allowed_images || [];
 
             select.innerHTML = images.map(img => {
-                const isSelected = (currentClient.images || []).some(i => i.filename === img.filename);
-                console.log(`Image ${img.name}: selected=${isSelected}`);
+                const isSelected = allowedImages.includes(img.filename);
                 return `<option value="${img.filename}" ${isSelected ? 'selected' : ''}>${img.name}</option>`;
             }).join('');
 
@@ -690,6 +708,7 @@ function renderImagesTable() {
     const sortedImages = getSortedImages();
 
     const html = `
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
@@ -786,6 +805,7 @@ function renderImagesTable() {
                 `).join('')}
             </tbody>
         </table>
+        </div>
     `;
 
     container.innerHTML = html;
@@ -1015,6 +1035,7 @@ function renderLogsTable(logs) {
     }
 
     const html = `
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
@@ -1043,6 +1064,7 @@ function renderLogsTable(logs) {
                 `).join('')}
             </tbody>
         </table>
+        </div>
     `;
 
     container.innerHTML = html;
@@ -1090,8 +1112,11 @@ function setupForms() {
         const updates = {
             name: formData.get('name'),
             description: formData.get('description'),
-            enabled: formData.get('enabled') === 'on'
+            enabled: formData.get('enabled') === 'on',
+            show_public_images: formData.get('show_public_images') === 'on',
+            bootloader_set: formData.get('bootloader_set') || ''
         };
+        console.log('Updating client:', mac, updates);
 
         try {
             // Update client
@@ -1139,6 +1164,7 @@ async function loadTheme() {
         const data = await res.json();
         if (data.success) {
             document.getElementById('theme-title').value = data.data.title || '';
+            document.getElementById('theme-timeout').value = data.data.menu_timeout != null ? data.data.menu_timeout : 30;
         }
     } catch (err) {
         console.error('Failed to load theme:', err);
@@ -1149,6 +1175,7 @@ async function saveTheme(e) {
     e.preventDefault();
     const theme = {
         title: document.getElementById('theme-title').value,
+        menu_timeout: parseInt(document.getElementById('theme-timeout').value) || 0,
     };
     try {
         const res = await fetch(`${API_BASE}/theme`, {
@@ -1167,6 +1194,382 @@ async function saveTheme(e) {
     }
 }
 
+// Tools
+async function loadTools() {
+    try {
+        const res = await fetch(`${API_BASE}/tools`);
+        const data = await res.json();
+        const container = document.getElementById('tools-list');
+
+        if (!data.success) {
+            container.innerHTML = `<p class="alert alert-error">${data.error || 'Failed to load tools'}</p>`;
+            return;
+        }
+
+        const toolsList = data.data || [];
+        if (toolsList.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-secondary);">No tools available.</p>';
+            return;
+        }
+
+        let html = '';
+        for (const tool of toolsList) {
+            html += `<div style="background: var(--bg-tertiary); padding: 22px 24px; border-radius: var(--radius); margin-bottom: 14px;">`;
+
+            // Header row
+            html += `<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">`;
+
+            // Left: info
+            html += `<div>`;
+            html += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">`;
+            html += `<strong style="font-size: 16px;">${escapeHtml(tool.display_name)}</strong>`;
+            html += `<span style="color: var(--text-muted); font-size: 13px;">v${escapeHtml(tool.version)}</span>`;
+            if (tool.enabled) html += `<span class="badge badge-success">Enabled</span>`;
+            if (tool.downloaded) html += `<span class="badge badge-info">Downloaded</span>`;
+            html += `</div>`;
+            html += `<p style="color: var(--text-secondary); font-size: 14px; margin: 0;">${escapeHtml(tool.description)}</p>`;
+            html += `</div>`;
+
+            // Right: actions
+            html += `<div style="display: flex; gap: 8px; align-items: center;">`;
+            if (!tool.downloaded) {
+                html += `<div id="tool-progress-container-${tool.name}">`;
+                html += `<button class="btn btn-primary" id="tool-dl-btn-${tool.name}" onclick="downloadTool('${tool.name}')">Download</button>`;
+                html += `<div id="tool-progress-wrap-${tool.name}" style="display:none; min-width: 250px;">`;
+                html += `<div style="background: var(--border); border-radius: 4px; height: 8px; overflow: hidden; margin-bottom: 4px;"><div id="tool-progress-${tool.name}" style="height: 100%; width: 0%; background: var(--success); border-radius: 4px; transition: width 0.3s;"></div></div>`;
+                html += `<span id="tool-progress-text-${tool.name}" style="font-size: 13px; color: var(--text-secondary);">Starting...</span>`;
+                html += `</div></div>`;
+            } else {
+                if (tool.enabled) {
+                    html += `<button class="btn btn-warning" onclick="toggleTool('${tool.name}', false)">Disable</button>`;
+                } else {
+                    html += `<button class="btn btn-success" onclick="toggleTool('${tool.name}', true)">Enable</button>`;
+                }
+                html += `<button class="btn btn-danger" onclick="deleteTool('${tool.name}')">Delete Files</button>`;
+            }
+            html += `</div></div>`;
+
+            // Download URL row
+            const urlId = `tool-url-${tool.name}`;
+            const defaultUrl = tool.download_url || '';
+            html += `<div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">`;
+            html += `<input type="text" id="${urlId}" value="${escapeHtml(defaultUrl)}" placeholder="Download URL" style="flex: 1; font-size: 13px; padding: 8px 12px; font-family: monospace;">`;
+            html += `<button class="btn btn-sm" onclick="updateToolURL('${tool.name}', '${urlId}')">Save URL</button>`;
+            html += `</div>`;
+
+            html += `</div>`;
+        }
+
+        container.innerHTML = html;
+    } catch (err) {
+        document.getElementById('tools-list').innerHTML = `<p class="alert alert-error">Failed to load tools: ${err.message}</p>`;
+    }
+}
+
+async function downloadTool(name) {
+    try {
+        const res = await fetch(`${API_BASE}/tools/download?name=${encodeURIComponent(name)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showNotification(data.error || 'Download failed', 'error');
+            return;
+        }
+
+        // Show progress bar, hide button
+        const btn = document.getElementById(`tool-dl-btn-${name}`);
+        const wrap = document.getElementById(`tool-progress-wrap-${name}`);
+        if (btn) btn.style.display = 'none';
+        if (wrap) wrap.style.display = 'block';
+
+        // Poll progress
+        const poll = setInterval(async () => {
+            try {
+                const r = await fetch(`${API_BASE}/tools/progress?name=${encodeURIComponent(name)}`);
+                const d = await r.json();
+                if (!d.success) return;
+
+                const p = d.data;
+                const bar = document.getElementById(`tool-progress-${name}`);
+                const text = document.getElementById(`tool-progress-text-${name}`);
+                if (!bar || !text) return;
+
+                if (p.status === 'downloading') {
+                    bar.style.width = p.percent.toFixed(0) + '%';
+                    const dlMB = (p.downloaded / 1048576).toFixed(1);
+                    const totalMB = p.total > 0 ? (p.total / 1048576).toFixed(1) : '?';
+                    text.textContent = `Downloading... ${dlMB} MB / ${totalMB} MB (${p.percent.toFixed(0)}%)`;
+                } else if (p.status === 'extracting') {
+                    bar.style.width = '100%';
+                    text.textContent = 'Extracting...';
+                } else if (p.status === 'done') {
+                    clearInterval(poll);
+                    showNotification('Download complete', 'success');
+                    loadTools();
+                } else if (p.status === 'error') {
+                    clearInterval(poll);
+                    showNotification('Download failed: ' + (p.error || 'unknown error'), 'error');
+                    loadTools();
+                }
+            } catch (e) { /* ignore poll errors */ }
+        }, 1000);
+    } catch (err) {
+        showNotification('Download failed: ' + err.message, 'error');
+    }
+}
+
+async function toggleTool(name, enabled) {
+    try {
+        const res = await fetch(`${API_BASE}/tools/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, enabled })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(data.message, 'success');
+            loadTools();
+        } else {
+            showNotification(data.error || 'Failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+async function deleteTool(name) {
+    if (!confirm(`Delete downloaded files for ${name}? You can re-download later.`)) return;
+    try {
+        const res = await fetch(`${API_BASE}/tools/delete?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Tool files deleted', 'success');
+            loadTools();
+        } else {
+            showNotification(data.error || 'Delete failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+async function updateToolURL(name, inputId) {
+    const url = document.getElementById(inputId).value.trim();
+    if (!url) {
+        showNotification('URL cannot be empty', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/tools/url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, url })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Download URL updated', 'success');
+        } else {
+            showNotification(data.error || 'Failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+// Bootloaders
+async function loadBootloaders() {
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders`);
+        const data = await res.json();
+        const container = document.getElementById('bootloaders-table');
+
+        if (!data.success) {
+            container.innerHTML = `<p class="alert alert-error">${data.error || 'Failed to load bootloaders'}</p>`;
+            return;
+        }
+
+        const sets = (data.data && data.data.sets) || [];
+        const activeSet = (data.data && data.data.active) || 'built-in';
+
+        if (sets.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-secondary);">No bootloaders found.</p>';
+            return;
+        }
+
+        let html = '';
+
+        for (const set of sets) {
+            const isActive = set.name === activeSet;
+            const isBuiltIn = set.name === 'built-in';
+            const escapedName = escapeHtml(set.name);
+            const files = set.files || [];
+
+            html += `<div style="background: var(--bg-tertiary); padding: 20px 24px; border-radius: var(--radius); margin-bottom: 14px; border: 2px solid ${isActive ? 'var(--success)' : 'transparent'};">`;
+
+            // Header row
+            html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">`;
+            html += `<div style="display: flex; align-items: center; gap: 12px;">`;
+            html += `<input type="radio" name="active-bootloader-set" value="${escapedName}" ${isActive ? 'checked' : ''} onchange="selectBootloaderSet('${escapedName}')" style="width: auto; accent-color: var(--success); transform: scale(1.3);">`;
+            html += `<div>`;
+            html += `<strong style="font-size: 16px;">${escapedName}</strong>`;
+            if (isActive) html += ` <span class="badge badge-success">Active</span>`;
+            if (isBuiltIn) html += ` <span class="badge badge-info">Bundled</span>`;
+            html += `<div style="color: var(--text-secondary); font-size: 13px; margin-top: 2px;">${files.length} file${files.length !== 1 ? 's' : ''}</div>`;
+            html += `</div></div>`;
+
+            // Actions
+            html += `<div style="display: flex; gap: 6px;">`;
+            if (!isBuiltIn) {
+                html += `<button class="btn btn-sm btn-primary" onclick="showUploadBootloaderFilesModal('${escapedName}')">Upload Files</button>`;
+                html += `<button class="btn btn-sm btn-danger" onclick="deleteBootloaderSet('${escapedName}')">Delete Set</button>`;
+            }
+            html += `</div>`;
+            html += `</div>`;
+
+            // File list
+            if (files.length > 0) {
+                html += `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px;">`;
+                for (const file of files) {
+                    html += `<div style="background: var(--bg-secondary); padding: 10px 14px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center; font-size: 14px;">`;
+                    html += `<span>${escapeHtml(file.name)}</span>`;
+                    html += `<div style="display: flex; align-items: center; gap: 10px;">`;
+                    html += `<span style="color: var(--text-muted); font-size: 13px;">${formatBytes(file.size)}</span>`;
+                    if (!isBuiltIn) {
+                        html += `<button class="btn btn-danger btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="deleteBootloaderFile('${escapedName}', '${escapeHtml(file.name)}')">✕</button>`;
+                    }
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+                html += `</div>`;
+            } else if (!isBuiltIn) {
+                html += `<p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">No files yet. Upload bootloader files or place them in <code>data/bootloaders/${escapedName}/</code>.</p>`;
+            }
+
+            html += `</div>`;
+        }
+
+        container.innerHTML = html;
+    } catch (err) {
+        document.getElementById('bootloaders-table').innerHTML = `<p class="alert alert-error">Failed to load bootloaders: ${err.message}</p>`;
+    }
+}
+
+async function selectBootloaderSet(setName) {
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders/select`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ set: setName })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Active bootloader set: ${setName}`, 'success');
+            loadBootloaders();
+        } else {
+            showNotification(data.error || 'Failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+function showCreateBootloaderSetModal() {
+    document.getElementById('bootloader-set-name').value = '';
+    openModal('create-bootloader-set-modal');
+}
+
+async function createBootloaderSet(event) {
+    event.preventDefault();
+    const nameInput = document.getElementById('bootloader-set-name');
+    const setName = nameInput.value.trim();
+    if (!setName) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: setName })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Set "${setName}" created`, 'success');
+            closeModal('create-bootloader-set-modal');
+            loadBootloaders();
+        } else {
+            showNotification(data.error || 'Failed to create set', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+function showUploadBootloaderFilesModal(setName) {
+    document.getElementById('upload-bl-set-name').textContent = setName;
+    document.getElementById('upload-bl-set-value').value = setName;
+    document.getElementById('bootloader-files-upload').value = '';
+    openModal('upload-bootloader-files-modal');
+}
+
+async function uploadBootloaderFiles(event) {
+    event.preventDefault();
+    const fileInput = document.getElementById('bootloader-files-upload');
+    const setName = document.getElementById('upload-bl-set-value').value;
+    if (!fileInput.files.length || !setName) return;
+
+    const formData = new FormData();
+    formData.append('set', setName);
+    for (const file of fileInput.files) {
+        formData.append('files', file);
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders/upload`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(data.message || 'Files uploaded', 'success');
+            closeModal('upload-bootloader-files-modal');
+            loadBootloaders();
+        } else {
+            showNotification(data.error || 'Upload failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Upload failed: ' + err.message, 'error');
+    }
+}
+
+async function deleteBootloaderSet(setName) {
+    if (!confirm(`Delete the entire "${setName}" bootloader set and all its files?`)) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Set "${setName}" deleted`, 'success');
+            loadBootloaders();
+        } else {
+            showNotification(data.error || 'Delete failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
+async function deleteBootloaderFile(setName, fileName) {
+    if (!confirm(`Delete "${fileName}" from set "${setName}"?`)) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}&name=${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Deleted ${fileName}`, 'success');
+            loadBootloaders();
+        } else {
+            showNotification(data.error || 'Delete failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed: ' + err.message, 'error');
+    }
+}
+
 // USB Images
 async function loadUSBImages() {
     try {
@@ -1179,7 +1582,7 @@ async function loadUSBImages() {
             return;
         }
 
-        let html = '<table class="data-table"><thead><tr><th>Image</th><th>Size</th><th>Type</th><th>Action</th></tr></thead><tbody>';
+        let html = '<div class="table-scroll"><table><thead><tr><th>Image</th><th>Size</th><th>Type</th><th>Action</th></tr></thead><tbody>';
         for (const img of data.data) {
             const size = formatBytes(img.size);
             const isSecureBoot = img.name.includes('secureboot');
@@ -1191,7 +1594,7 @@ async function loadUSBImages() {
                 <td><a href="${API_BASE}/usb/download?name=${encodeURIComponent(img.name)}" class="btn btn-sm btn-primary">Download</a></td>
             </tr>`;
         }
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         html += `<div style="margin-top: 15px; padding: 15px; background: var(--bg-secondary); border-radius: 8px; color: var(--text-secondary); font-size: 13px;">
             <strong style="color: var(--accent);">Writing to USB:</strong><br>
             <code style="color: var(--text-primary);">sudo dd if=bootimus.usb of=/dev/sdX bs=4M status=progress</code><br><br>
@@ -1412,10 +1815,19 @@ function displayLogs(logs) {
 
     logs.forEach(log => {
         const logEntry = document.createElement('div');
-        logEntry.style.color = '#e2e8f0';
-        logEntry.style.marginBottom = '4px';
-        logEntry.style.fontFamily = 'monospace';
-        logEntry.style.fontSize = '13px';
+        logEntry.style.marginBottom = '2px';
+        logEntry.style.wordBreak = 'break-all';
+        // Colour-code by content
+        const lower = log.toLowerCase();
+        if (lower.includes('error') || lower.includes('failed')) {
+            logEntry.style.color = '#ef4444';
+        } else if (lower.includes('warn')) {
+            logEntry.style.color = '#f59e0b';
+        } else if (lower.includes('success') || lower.includes('ready')) {
+            logEntry.style.color = '#10b981';
+        } else {
+            logEntry.style.color = '#d0d0d0';
+        }
         logEntry.textContent = log;
         liveLogsDiv.appendChild(logEntry);
     });
@@ -1493,6 +1905,7 @@ function renderUsersTable(users) {
     }
 
     let html = `
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
@@ -1508,8 +1921,8 @@ function renderUsersTable(users) {
     `;
 
     users.forEach(user => {
-        const role = user.is_admin ? '<span class="badge badge-admin">Admin</span>' : '<span class="badge badge-user">User</span>';
-        const status = user.enabled ? '<span class="badge badge-enabled">Enabled</span>' : '<span class="badge badge-disabled">Disabled</span>';
+        const role = user.is_admin ? '<span class="badge badge-info">Admin</span>' : '<span class="badge badge-success">User</span>';
+        const status = user.enabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-danger">Disabled</span>';
         const lastLogin = user.last_login ? new Date(user.last_login).toLocaleString() : 'Never';
         const created = new Date(user.created_at).toLocaleString();
 
@@ -1521,15 +1934,15 @@ function renderUsersTable(users) {
                 <td>${lastLogin}</td>
                 <td>${created}</td>
                 <td>
-                    <button class="btn-small" onclick='editUser(${JSON.stringify(user)})'>Edit</button>
-                    <button class="btn-small" onclick='showResetPasswordModal(${JSON.stringify(user)})'>Reset Password</button>
-                    ${user.username !== 'admin' ? `<button class="btn-small btn-danger" onclick="deleteUser('${user.username}')">Delete</button>` : ''}
+                    <button class="btn btn-info btn-sm" onclick='editUser(${JSON.stringify(user)})'>Edit</button>
+                    <button class="btn btn-sm" onclick='showResetPasswordModal(${JSON.stringify(user)})'>Reset Password</button>
+                    ${user.username !== 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${user.username}')">Delete</button>` : ''}
                 </td>
             </tr>
         `;
     });
 
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     document.getElementById('users-table').innerHTML = html;
 }
 
@@ -1920,39 +2333,40 @@ function renderPublicFilesTable(files) {
         return;
     }
 
-    const table = document.createElement('table');
-    table.className = 'data-table';
-    table.innerHTML = `
-        <thead>
-            <tr>
-                <th>Filename</th>
-                <th>Description</th>
-                <th>Type</th>
-                <th>Size</th>
-                <th>Downloads</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            ${files.map(file => `
+    const html = `
+        <div class="table-scroll">
+        <table>
+            <thead>
                 <tr>
-                    <td><code style="color: var(--accent);">${escapeHtml(file.filename)}</code></td>
-                    <td>${escapeHtml(file.description || '-')}</td>
-                    <td><span class="badge">${escapeHtml(file.content_type || 'unknown')}</span></td>
-                    <td>${formatBytes(file.size)}</td>
-                    <td>${file.download_count || 0}</td>
-                    <td>
-                        <button class="btn btn-small" onclick="copyFileDownloadURL('${escapeHtml(file.filename)}')">📋 Copy URL</button>
-                        <button class="btn btn-small" onclick="showEditFileModal(${file.id})">Edit</button>
-                        <button class="btn btn-danger btn-small" onclick="deleteFile(${file.id}, '${escapeHtml(file.filename)}')">Delete</button>
-                    </td>
+                    <th>Filename</th>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Downloads</th>
+                    <th>Actions</th>
                 </tr>
-            `).join('')}
-        </tbody>
+            </thead>
+            <tbody>
+                ${files.map(file => `
+                    <tr>
+                        <td><code>${escapeHtml(file.filename)}</code></td>
+                        <td>${escapeHtml(file.description || '-')}</td>
+                        <td><span class="badge badge-info">${escapeHtml(file.content_type || 'unknown')}</span></td>
+                        <td>${formatBytes(file.size)}</td>
+                        <td>${file.download_count || 0}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="copyFileDownloadURL('${escapeHtml(file.filename)}')">📋 Copy URL</button>
+                            <button class="btn btn-info btn-sm" onclick="showEditFileModal(${file.id})">Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteFile(${file.id}, '${escapeHtml(file.filename)}')">Delete</button>
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+        </div>
     `;
 
-    container.innerHTML = '';
-    container.appendChild(table);
+    container.innerHTML = html;
 }
 
 function showUploadPublicFileModal() {
@@ -2027,39 +2441,40 @@ function renderImageFilesTable(files, imageId, imageName) {
         return;
     }
 
-    const table = document.createElement('table');
-    table.className = 'data-table';
-    table.innerHTML = `
-        <thead>
-            <tr>
-                <th>Filename</th>
-                <th>Description</th>
-                <th>Type</th>
-                <th>Size</th>
-                <th>Downloads</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            ${files.map(file => `
+    const html = `
+        <div class="table-scroll">
+        <table>
+            <thead>
                 <tr>
-                    <td><code style="color: var(--accent);">${escapeHtml(file.filename)}</code></td>
-                    <td>${escapeHtml(file.description || '-')}</td>
-                    <td><span class="badge">${escapeHtml(file.content_type || 'unknown')}</span></td>
-                    <td>${formatBytes(file.size)}</td>
-                    <td>${file.download_count || 0}</td>
-                    <td>
-                        <button class="btn btn-small" onclick="copyFileDownloadURL('${escapeHtml(file.filename)}')">📋 Copy URL</button>
-                        <button class="btn btn-small" onclick="showEditFileModal(${file.id})">Edit</button>
-                        <button class="btn btn-danger btn-small" onclick="deleteFile(${file.id}, '${escapeHtml(file.filename)}')">Delete</button>
-                    </td>
+                    <th>Filename</th>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Downloads</th>
+                    <th>Actions</th>
                 </tr>
-            `).join('')}
-        </tbody>
+            </thead>
+            <tbody>
+                ${files.map(file => `
+                    <tr>
+                        <td><code>${escapeHtml(file.filename)}</code></td>
+                        <td>${escapeHtml(file.description || '-')}</td>
+                        <td><span class="badge badge-info">${escapeHtml(file.content_type || 'unknown')}</span></td>
+                        <td>${formatBytes(file.size)}</td>
+                        <td>${file.download_count || 0}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="copyFileDownloadURL('${escapeHtml(file.filename)}')">📋 Copy URL</button>
+                            <button class="btn btn-info btn-sm" onclick="showEditFileModal(${file.id})">Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteFile(${file.id}, '${escapeHtml(file.filename)}')">Delete</button>
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+        </div>
     `;
 
-    container.innerHTML = '';
-    container.appendChild(table);
+    container.innerHTML = html;
 }
 
 async function uploadImageFile(event) {
@@ -2277,6 +2692,7 @@ function renderGroupsTable() {
     });
 
     let html = `
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
@@ -2303,8 +2719,8 @@ function renderGroupsTable() {
                 <td>${group.order}</td>
                 <td>${status}</td>
                 <td>
-                    <button class="btn btn-sm btn-info" onclick="showEditGroupModal(${group.id})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteGroup(${group.id}, '${escapeHtml(group.name).replace(/'/g, "\\'")}')">Delete</button>
+                    <button class="btn btn-info btn-sm" onclick="showEditGroupModal(${group.id})">Edit</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteGroup(${group.id}, '${escapeHtml(group.name).replace(/'/g, "\\'")}')">Delete</button>
                 </td>
             </tr>
         `;
@@ -2313,6 +2729,7 @@ function renderGroupsTable() {
     html += `
             </tbody>
         </table>
+        </div>
     `;
 
     container.innerHTML = html;

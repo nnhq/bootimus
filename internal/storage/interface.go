@@ -60,6 +60,10 @@ type Storage interface {
 	GetMenuTheme() (*models.MenuTheme, error)
 	UpdateMenuTheme(theme *models.MenuTheme) error
 
+	ListBootTools() ([]*models.BootTool, error)
+	GetBootTool(name string) (*models.BootTool, error)
+	SaveBootTool(tool *models.BootTool) error
+
 	LogBootAttempt(macAddress, imageName, ipAddress string, success bool, errorMsg string) error
 	UpdateClientBootStats(macAddress string) error
 	UpdateImageBootStats(imageName string) error

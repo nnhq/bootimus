@@ -12,21 +12,15 @@ I've used Claude CLI to help with some parts of this project - mostly making the
 
 ## Features
 
-- **Self-contained**: Single binary with embedded bootloaders and web UI
-- **Zero configuration**: Sensible defaults, works out of the box
-- **Database-backed**: SQLite (default) or PostgreSQL support
-- **MAC-based ACL**: Per-client ISO menus (assigned clients see only their images)
-- **Folder-based groups**: Organise ISOs into subdirectories for automatic menu grouping
-- **Admin interface**: Full-featured web UI with REST API
-- **Secure Boot support**: Microsoft-signed shim bootloader for UEFI Secure Boot environments
-- **Docker ready**: Multi-arch images (amd64/arm64)
-- **Kernel extraction**: Faster boots with reduced bandwidth
-- **Netboot support**: Debian/Ubuntu network installer optimisation
-- **Thin OS memdisk**: Universal ISO boot via minimal Linux environment
-- **Custom menu title**: Configurable boot menu title via admin Settings tab
-- **Boot logging**: Real-time tracking with live streaming
-- **HTTP Basic Auth**: Auto-generated password on first run
-- **Spaces in filenames**: ISOs with spaces in names are handled correctly
+- **Single binary, zero config**: Everything bundled - bootloaders, web UI, database. Just run it
+- **50+ distro support**: Automatic kernel/initrd extraction with a generic fallback scanner for unknown ISOs
+- **Built-in diagnostic tools**: GParted, Clonezilla, Memtest86+, SystemRescue, ShredOS, Netboot.xyz - one-click download and enable from the admin UI
+- **Per-client access control**: Assign specific images per MAC address, toggle public image visibility per client
+- **Swappable bootloaders**: Ship with embedded iPXE, or bring your own custom bootloader sets
+- **Secure Boot**: Microsoft-signed shim bootloader for UEFI Secure Boot environments
+- **Modern admin UI**: Sidebar navigation, real-time colour-coded logs, REST API
+- **Multi-database**: SQLite out of the box, PostgreSQL for production
+- **Docker and bare metal**: Multi-arch images (amd64/arm64) or a single static binarybut the 
 
 ## Screenshots
 
@@ -82,45 +76,57 @@ docker-compose up -d
 
 ## Documentation
 
-### Quick Links
-
 - **[Deployment Guide](docs/deployment.md)** - Docker, binary, networking, and storage
 - **[Image Management](docs/images.md)** - Upload ISOs, extract kernels, netboot support
 - **[Thin OS Boot Method](docs/thinos.md)** - Universal ISO boot via memdisk
 - **[Admin Console](docs/admin.md)** - Web UI and REST API reference
 - **[DHCP Configuration](docs/dhcp.md)** - Configure your DHCP server
 - **[Client Management](docs/clients.md)** - MAC-based access control
-- **[Security Guide](docs/security.md)** - Best practises and hardening
 
+## Boot Tools
 
-## Tested Images
+Bootimus includes a built-in tools system for diagnostic and utility software. Tools can be downloaded and enabled from the admin UI under the **Tools** section. When enabled, they appear in a **Tools** submenu in the PXE boot menu.
 
-### Arch Based
-- ✅ archlinux-2025.12.01-x86_64.iso
-- ✅ archlinux-2026.02.01-x86_64.iso
+| Tool | Description |
+|------|-------------|
+| **GParted Live** | Partition editor for managing disk partitions |
+| **Clonezilla Live** | Disk cloning and imaging |
+| **Memtest86+** | Memory testing and diagnostics |
+| **SystemRescue** | Full rescue toolkit (file recovery, disk repair, network tools) |
+| **ShredOS** | Secure disk wiping based on nwipe |
+| **Netboot.xyz** | Chainloads into hundreds of OS installers and tools |
+| **HDT** | Hardware inventory and diagnostics |
 
-### RHEL Based
-- ✅ Rocky-10.1-x86_64-minimal.iso
-- ✅ Fedora-KDE-Desktop-Live-43-1.6.x86_64.iso
-- ✅ Fedora-Workstation-Live-43-1.6.x86_64.iso
+Download URLs are shown in the UI and can be overridden to point at local mirrors or newer versions.
 
-### Debian/Ubuntu Based
-- ✅ ubuntu-24.04-live-server-amd64.iso (with netboot)
-- ✅ ubuntu-24.04-desktop-amd64.iso (with fetch optimisation)
-- ✅ xubuntu-24.04-desktop-amd64.iso
-- ✅ debian-12.5.0-amd64-netinst.iso (with netboot)
-- ✅ debian-live-13.3.0-amd64-xfce.iso
-- ✅ pop-os_22.04_amd64_intel_39.iso
-- ✅ pop-os_24.04_amd64_generic_22.iso
-- ✅ TrueNAS-SCALE-25.10.2.1.iso
-- ✅ proxmox-ve_9.1-1.iso
+## Bootloader Management
+
+Bootimus ships with embedded iPXE bootloaders for UEFI (x86_64, ARM64), Legacy BIOS, and Secure Boot. You can also use custom bootloader sets:
+
+1. Create a subfolder in `{data-dir}/bootloaders/` (e.g. `ipxe-custom/`)
+2. Place your custom bootloader files in it
+3. Select the set from the **Bootloaders** section in the admin UI
+
+The built-in set is always available as a fallback. Files not present in the active custom set are served from the built-in set automatically.
+
+## Supported Distributions
+
+### Arch-based
+- Arch Linux, CachyOS, EndeavourOS, Manjaro, Garuda, Artix, BlackArch, Parabola, SteamOS
+
+### Debian/Ubuntu-based
+- Ubuntu (all flavours), Debian, Linux Mint, Pop!_OS, Kali, Parrot, Zorin, elementary OS, MX Linux, antiX, Devuan, PureOS, Deepin, LMDE, TrueNAS SCALE, Proxmox
+
+### Red Hat-based
+- Fedora, CentOS, Rocky Linux, AlmaLinux, Oracle Linux, Nobara, Mageia
+
+### Other Linux
+- openSUSE, NixOS, Alpine, Gentoo, Void, Slackware, Solus, Tiny Core, Clear Linux
 
 ### Other
-- ✅ openSUSE-Leap-15.5-DVD-x86_64-Build491.1-Media.iso
-- ✅ nixos-graphical-25.11-x86_64-linux.iso
-- ✅ Windows_ent_22H2.iso (wimboot)
-- ✅ slackware64-15.0-install-dvd.iso (sanboot)
-- ✅ gentoo-install-amd64-minimal.iso (sanboot)
+- FreeBSD, Windows (via wimboot)
+
+For distributions not in this list, the **generic boot scanner** automatically walks the ISO filesystem to find kernel and initrd files and attempts to extract boot parameters from syslinux/grub configuration files.
 
 ## ISO Organisation
 
@@ -142,28 +148,27 @@ Groups are auto-created on startup and when scanning for ISOs. They can also be 
 ## Roadmap
 
 - iPXE colour theming (blocked on iPXE firmware compatibility)
-- NixOS support (and maybe inject nixconfig to the image?)
-- FreeBSD support
-- NetBSD support
-- OpenBSD support
+- Per-client bootloader selection
+- NetBSD/OpenBSD support
 
 ## Why Bootimus Over iVentoy?
 
 | Feature | Bootimus | iVentoy |
 |---------|----------|---------|
 | **Language** | Go | C |
-| **Single Binary** | ✅ Yes | ❌ No |
-| **Embedded Bootloaders** | ✅ Yes | ❌ No |
+| **Single Binary** | Yes | No |
+| **Embedded Bootloaders** | Yes | No |
 | **Database** | SQLite / PostgreSQL | File-based |
-| **Web UI** | ✅ Modern REST API | Basic HTML |
+| **Web UI** | Modern sidebar UI with REST API | Basic HTML |
 | **Authentication** | HTTP Basic Auth | None |
-| **Boot Logging** | ✅ Full tracking | Limited |
-| **MAC-based ACL** | ✅ Granular | ❌ No |
-| **ISO Upload** | ✅ Web upload | Manual copy |
-| **Docker Support** | ✅ Multi-arch | Limited |
-| **API-First** | ✅ RESTful API | ❌ No |
+| **Boot Logging** | Full tracking with live streaming | Limited |
+| **MAC-based ACL** | Granular per-client | No |
+| **ISO Upload** | Web upload + URL download | Manual copy |
+| **Boot Tools** | GParted, Clonezilla, Memtest86+, etc. | No |
+| **Bootloader Management** | Swappable sets via UI | No |
+| **Docker Support** | Multi-arch | Limited |
+| **API-First** | RESTful API | No |
 | **Licence** | Apache 2.0 | GPL |
-
 
 ## DHCP Configuration
 
@@ -229,8 +234,6 @@ Run `make help` for all available targets.
 - **Separate admin port**: Admin interface isolated from boot network
 - **Audit logs**: All boot attempts logged with client/image/success tracking
 
-See [Security Guide](docs/security.md) for best practises.
-
 ## Troubleshooting
 
 ### Permission Denied on Port 69
@@ -270,8 +273,6 @@ ls -la data/bootimus.db
 # For PostgreSQL, test connection
 psql -h localhost -U bootimus -d bootimus
 ```
-
-See full [Troubleshooting Guide](docs/troubleshooting.md) for more solutions.
 
 ## Licence
 

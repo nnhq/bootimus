@@ -27,6 +27,7 @@ import (
 	"bootimus/internal/models"
 	"bootimus/internal/nbd"
 	"bootimus/internal/storage"
+	"bootimus/internal/tools"
 	"bootimus/web"
 
 	"github.com/pin/tftp/v3"
@@ -74,13 +75,16 @@ type Config struct {
 }
 
 type Server struct {
-	config         *Config
-	httpServer     *http.Server
-	adminServer    *http.Server
-	tftpServer     *tftp.Server
-	wg             sync.WaitGroup
-	activeSessions *ActiveSessions
-	logBroadcaster *LogBroadcaster
+	config             *Config
+	httpServer         *http.Server
+	adminServer        *http.Server
+	tftpServer         *tftp.Server
+	wg                 sync.WaitGroup
+	activeSessions     *ActiveSessions
+	logBroadcaster     *LogBroadcaster
+	activeBootloaderSet   string // name of active set folder, empty = built-in
+	activeBootloaderSetMu sync.RWMutex
+	toolsManager          *tools.Manager
 }
 
 type ActiveSession struct {
@@ -260,13 +264,77 @@ func New(cfg *Config) *Server {
 
 	globalLogBroadcaster = lb
 
-	return &Server{
+	tm := tools.NewManager(cfg.Storage, cfg.DataDir)
+	tm.EnsureToolRecords()
+
+	s := &Server{
 		config: cfg,
 		activeSessions: &ActiveSessions{
 			sessions: make(map[string]*ActiveSession),
 		},
 		logBroadcaster: lb,
+		toolsManager:   tm,
 	}
+	s.loadBootloaderConfig()
+	return s
+}
+
+// Bootloader set config - stores which set folder is active
+func (s *Server) bootloaderConfigPath() string {
+	return filepath.Join(s.config.DataDir, "bootloader-config.json")
+}
+
+type bootloaderConfigFile struct {
+	ActiveSet string `json:"active_set"` // folder name or "" for built-in
+}
+
+func (s *Server) loadBootloaderConfig() {
+	data, err := os.ReadFile(s.bootloaderConfigPath())
+	if err != nil {
+		return
+	}
+	var cfg bootloaderConfigFile
+	if json.Unmarshal(data, &cfg) == nil {
+		s.activeBootloaderSetMu.Lock()
+		s.activeBootloaderSet = cfg.ActiveSet
+		s.activeBootloaderSetMu.Unlock()
+	}
+}
+
+func (s *Server) SaveBootloaderConfig() error {
+	s.activeBootloaderSetMu.RLock()
+	cfg := bootloaderConfigFile{ActiveSet: s.activeBootloaderSet}
+	s.activeBootloaderSetMu.RUnlock()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.bootloaderConfigPath(), data, 0644)
+}
+
+func (s *Server) GetActiveBootloaderSet() string {
+	s.activeBootloaderSetMu.RLock()
+	defer s.activeBootloaderSetMu.RUnlock()
+	return s.activeBootloaderSet
+}
+
+func (s *Server) SetActiveBootloaderSet(name string) {
+	s.activeBootloaderSetMu.Lock()
+	defer s.activeBootloaderSetMu.Unlock()
+	s.activeBootloaderSet = name
+}
+
+// resolveBootloaderFile checks the active set folder for a file, returns "" if not found
+func (s *Server) resolveBootloaderFile(filename string) string {
+	setName := s.GetActiveBootloaderSet()
+	if setName == "" || s.config.BootDir == "" {
+		return "" // use embedded
+	}
+	fullPath := filepath.Join(s.config.BootDir, setName, filename)
+	if _, err := os.Stat(fullPath); err == nil {
+		return fullPath
+	}
+	return "" // not in set, fall back to embedded
 }
 
 func (as *ActiveSessions) Add(ip, filename string, totalBytes int64, activity string) {
@@ -524,6 +592,34 @@ goto dhcp
 				return nil
 			}
 
+			// Check active bootloader set
+			if customPath := s.resolveBootloaderFile(cleanPath); customPath != "" {
+				file, err := os.Open(customPath)
+				if err == nil {
+					defer file.Close()
+					log.Printf("TFTP: Serving from set '%s': %s", s.GetActiveBootloaderSet(), cleanPath)
+
+					fileInfo, err := file.Stat()
+					if err != nil {
+						return err
+					}
+
+					if rfs, ok := rf.(interface{ SetSize(int64) error }); ok {
+						rfs.SetSize(fileInfo.Size())
+					}
+
+					n, err := rf.ReadFrom(file)
+					if err != nil {
+						log.Printf("TFTP: Transfer error for %s: %v", filename, err)
+						return err
+					}
+
+					log.Printf("TFTP: Successfully sent %s (%d bytes)", filename, n)
+					return nil
+				}
+			}
+
+			// Default: serve embedded bootloader
 			data, err := bootloaders.Bootloaders.ReadFile(cleanPath)
 			if err == nil {
 				log.Printf("TFTP: Serving embedded bootloader: %s", cleanPath)
@@ -533,36 +629,6 @@ goto dhcp
 				}
 
 				n, err := rf.ReadFrom(bytes.NewReader(data))
-				if err != nil {
-					log.Printf("TFTP: Transfer error for %s: %v", filename, err)
-					return err
-				}
-
-				log.Printf("TFTP: Successfully sent %s (%d bytes)", filename, n)
-				return nil
-			}
-
-			if s.config.BootDir != "" {
-				fullPath := filepath.Join(s.config.BootDir, cleanPath)
-				log.Printf("TFTP: Trying boot directory: %s", fullPath)
-
-				file, err := os.Open(fullPath)
-				if err != nil {
-					log.Printf("TFTP: Failed to open file %s: %v", fullPath, err)
-					return err
-				}
-				defer file.Close()
-
-				fileInfo, err := file.Stat()
-				if err != nil {
-					return err
-				}
-
-				if rfs, ok := rf.(interface{ SetSize(int64) error }); ok {
-					rfs.SetSize(fileInfo.Size())
-				}
-
-				n, err := rf.ReadFrom(file)
 				if err != nil {
 					log.Printf("TFTP: Transfer error for %s: %v", filename, err)
 					return err
@@ -605,6 +671,18 @@ func (s *Server) startHTTPServer() error {
 			return
 		}
 
+		// Check active bootloader set
+		if customPath := s.resolveBootloaderFile(cleanPath); customPath != "" {
+			log.Printf("HTTP: Serving from set '%s': %s", s.GetActiveBootloaderSet(), cleanPath)
+			ext := filepath.Ext(cleanPath)
+			if ext == ".efi" || ext == ".img" || ext == ".iso" || ext == ".kpxe" || ext == ".usb" {
+				w.Header().Set("Content-Type", "application/octet-stream")
+			}
+			http.ServeFile(w, r, customPath)
+			return
+		}
+
+		// Default: serve embedded bootloader
 		data, err := bootloaders.Bootloaders.ReadFile(cleanPath)
 		if err == nil {
 			log.Printf("HTTP: Serving embedded bootloader: %s", cleanPath)
@@ -613,23 +691,14 @@ func (s *Server) startHTTPServer() error {
 			return
 		}
 
-		if s.config.BootDir != "" {
-			fullPath := filepath.Join(s.config.BootDir, cleanPath)
-			if _, err := os.Stat(fullPath); err == nil {
-				log.Printf("HTTP: Serving from boot directory: %s", fullPath)
-				ext := filepath.Ext(r.URL.Path)
-				if ext == ".efi" || ext == ".img" || ext == ".iso" {
-					w.Header().Set("Content-Type", "application/octet-stream")
-				}
-				http.ServeFile(w, r, fullPath)
-				return
-			}
-		}
-
 		http.Error(w, "Not found", http.StatusNotFound)
 	})
 
 	mux.HandleFunc("/menu.ipxe", s.handleIPXEMenu)
+
+	// Serve tool files (GParted, Clonezilla, etc.)
+	toolsDir := filepath.Join(s.config.DataDir, "tools")
+	mux.Handle("/tools/", http.StripPrefix("/tools/", http.FileServer(http.Dir(toolsDir))))
 
 	mux.HandleFunc("/autoexec.ipxe", s.handleAutoexec)
 
@@ -800,7 +869,7 @@ func (s *Server) startAdminServer() error {
 func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 	log.Println("Setting up admin interface")
 
-	adminHandler := admin.NewHandler(s.config.Storage, s.config.DataDir, s.config.ISODir, s.config.BootDir, Version)
+	adminHandler := admin.NewHandler(s.config.Storage, s.config.DataDir, s.config.ISODir, s.config.BootDir, Version, s, s.toolsManager)
 
 	staticFS, err := fs.Sub(web.Static, "static")
 	if err != nil {
@@ -837,7 +906,8 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 		switch r.Method {
 		case http.MethodGet:
 			id := r.URL.Query().Get("id")
-			if id != "" {
+			mac := r.URL.Query().Get("mac")
+			if id != "" || mac != "" {
 				adminHandler.GetClient(w, r)
 			} else {
 				adminHandler.ListClients(w, r)
@@ -872,8 +942,18 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 	}))
 
 	mux.HandleFunc("/api/bootloaders", authWrap(adminHandler.ListBootloaders))
+	mux.HandleFunc("/api/bootloaders/create", authWrap(adminHandler.CreateBootloaderSet))
 	mux.HandleFunc("/api/bootloaders/upload", authWrap(adminHandler.UploadBootloader))
 	mux.HandleFunc("/api/bootloaders/delete", authWrap(adminHandler.DeleteBootloader))
+	mux.HandleFunc("/api/bootloaders/select", authWrap(adminHandler.SelectBootloader))
+
+	// Tools
+	mux.HandleFunc("/api/tools", authWrap(adminHandler.ListTools))
+	mux.HandleFunc("/api/tools/toggle", authWrap(adminHandler.ToggleTool))
+	mux.HandleFunc("/api/tools/download", authWrap(adminHandler.DownloadTool))
+	mux.HandleFunc("/api/tools/delete", authWrap(adminHandler.DeleteTool))
+	mux.HandleFunc("/api/tools/progress", authWrap(adminHandler.ToolProgress))
+	mux.HandleFunc("/api/tools/url", authWrap(adminHandler.UpdateToolURL))
 
 	mux.HandleFunc("/api/images/extract", authWrap(adminHandler.ExtractImage))
 	mux.HandleFunc("/api/images/boot-method", authWrap(adminHandler.SetBootMethod))

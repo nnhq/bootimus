@@ -62,18 +62,20 @@ func (u *User) CheckPassword(password string) bool {
 }
 
 type Client struct {
-	ID            uint           `gorm:"primarykey" json:"id"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
-	MACAddress    string         `gorm:"uniqueIndex:idx_mac_not_deleted;not null" json:"mac_address"`
-	Name          string         `json:"name"`
-	Description   string         `json:"description"`
-	Enabled       bool           `gorm:"default:true" json:"enabled"`
-	LastBoot      *time.Time     `json:"last_boot,omitempty"`
-	BootCount     int            `gorm:"default:0" json:"boot_count"`
-	Images        []Image        `gorm:"many2many:client_images;" json:"images,omitempty"`
-	AllowedImages StringSlice    `gorm:"type:text" json:"allowed_images,omitempty"`
+	ID               uint           `gorm:"primarykey" json:"id"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
+	MACAddress       string         `gorm:"uniqueIndex:idx_mac_not_deleted;not null" json:"mac_address"`
+	Name             string         `json:"name"`
+	Description      string         `json:"description"`
+	Enabled          bool           `gorm:"default:true" json:"enabled"`
+	ShowPublicImages bool           `gorm:"default:true" json:"show_public_images"`
+	BootloaderSet    string         `json:"bootloader_set,omitempty"`
+	LastBoot         *time.Time     `json:"last_boot,omitempty"`
+	BootCount        int            `gorm:"default:0" json:"boot_count"`
+	Images           []Image        `gorm:"many2many:client_images;" json:"images,omitempty"`
+	AllowedImages    StringSlice    `gorm:"type:text" json:"allowed_images,omitempty"`
 }
 
 type SyncFile struct {
@@ -186,6 +188,21 @@ type MenuTheme struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// Menu title
-	Title string `gorm:"default:Bootimus - Boot Menu" json:"title"`
+	Title        string `gorm:"default:Bootimus - Boot Menu" json:"title"`
+	MenuTimeout  int    `gorm:"default:30" json:"menu_timeout"`    // seconds, 0 = no timeout (wait forever)
+}
+
+type BootTool struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	Name        string `gorm:"uniqueIndex;not null" json:"name"`        // e.g. "gparted"
+	DisplayName string `json:"display_name"`                            // e.g. "GParted Live"
+	Description string `json:"description"`                             // short description
+	Version     string `json:"version"`                                 // e.g. "1.8.1-2"
+	Enabled     bool   `gorm:"default:false" json:"enabled"`            // show in boot menu
+	Downloaded  bool   `gorm:"default:false" json:"downloaded"`         // files are on disk
+	Order       int    `gorm:"default:0" json:"order"`                  // menu order
+	DownloadURL string `json:"download_url"`                            // user-overridable URL
 }

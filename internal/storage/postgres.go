@@ -55,6 +55,7 @@ func (s *PostgresStore) AutoMigrate() error {
 		&models.CustomFile{},
 		&models.DriverPack{},
 		&models.MenuTheme{},
+		&models.BootTool{},
 	); err != nil {
 		return err
 	}
@@ -117,6 +118,26 @@ func (s *PostgresStore) migrateCustomFileUniqueIndex() error {
 	return nil
 }
 
+func (s *PostgresStore) ListBootTools() ([]*models.BootTool, error) {
+	var tools []*models.BootTool
+	if err := s.db.Order("\"order\" ASC, name ASC").Find(&tools).Error; err != nil {
+		return nil, err
+	}
+	return tools, nil
+}
+
+func (s *PostgresStore) GetBootTool(name string) (*models.BootTool, error) {
+	var tool models.BootTool
+	if err := s.db.Where("name = ?", name).First(&tool).Error; err != nil {
+		return nil, err
+	}
+	return &tool, nil
+}
+
+func (s *PostgresStore) SaveBootTool(tool *models.BootTool) error {
+	return s.db.Save(tool).Error
+}
+
 func (s *PostgresStore) Close() error {
 	return nil
 }
@@ -143,7 +164,9 @@ func (s *PostgresStore) CreateClient(client *models.Client) error {
 }
 
 func (s *PostgresStore) UpdateClient(mac string, client *models.Client) error {
-	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).Updates(client).Error
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "UpdatedAt").
+		Updates(client).Error
 }
 
 func (s *PostgresStore) DeleteClient(mac string) error {
@@ -290,12 +313,10 @@ func (s *PostgresStore) AssignImagesToClient(mac string, imageFilenames []string
 		return err
 	}
 
-	var images []models.Image
-	if err := s.db.Where("filename IN ?", imageFilenames).Find(&images).Error; err != nil {
-		return err
-	}
-
-	return s.db.Model(&client).Association("Images").Replace(images)
+	allowed := models.StringSlice(imageFilenames)
+	return s.db.Model(&client).Select("AllowedImages").Updates(map[string]interface{}{
+		"allowed_images": allowed,
+	}).Error
 }
 
 func (s *PostgresStore) GetClientImages(mac string) ([]string, error) {
@@ -313,15 +334,39 @@ func (s *PostgresStore) GetClientImages(mac string) ([]string, error) {
 
 func (s *PostgresStore) GetImagesForClient(macAddress string) ([]models.Image, error) {
 	var client models.Client
-	if err := s.db.Where("mac_address = ? AND enabled = ?", macAddress, true).
-		Preload("Images", "enabled = ?", true).
-		First(&client).Error; err == nil {
-		if len(client.Images) > 0 {
-			return client.Images, nil
+	if err := s.db.Where("mac_address = ? AND enabled = ?", macAddress, true).First(&client).Error; err == nil {
+		log.Printf("GetImagesForClient: client=%s, AllowedImages=%v, ShowPublicImages=%v", macAddress, client.AllowedImages, client.ShowPublicImages)
+		var assigned []models.Image
+		if len(client.AllowedImages) > 0 {
+			s.db.Where("filename IN ? AND enabled = ?", client.AllowedImages, true).Find(&assigned)
+			log.Printf("GetImagesForClient: found %d assigned images for %v", len(assigned), client.AllowedImages)
+		}
+
+		if client.ShowPublicImages {
+			var publicImages []models.Image
+			s.db.Where("enabled = ? AND public = ?", true, true).Find(&publicImages)
+
+			seen := make(map[string]bool)
+			for _, img := range assigned {
+				seen[img.Filename] = true
+			}
+			for _, img := range publicImages {
+				if !seen[img.Filename] {
+					assigned = append(assigned, img)
+				}
+			}
+		}
+
+		if len(assigned) > 0 {
+			return assigned, nil
+		}
+
+		if !client.ShowPublicImages {
+			return []models.Image{}, nil
 		}
 	}
 
-	// Unknown client or no assigned images — show all public images
+	// Unknown client — show all public images
 	var images []models.Image
 	if err := s.db.Where("enabled = ? AND public = ?", true, true).Find(&images).Error; err != nil {
 		return nil, err

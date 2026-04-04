@@ -20,23 +20,35 @@ import (
 	"bootimus/internal/models"
 	"bootimus/internal/storage"
 	"bootimus/internal/sysstats"
+	"bootimus/internal/tools"
 )
 
-type Handler struct {
-	storage storage.Storage
-	dataDir string
-	isoDir  string
-	bootDir string
-	version string
+// BootloaderSelector provides bootloader set management
+type BootloaderSelector interface {
+	GetActiveBootloaderSet() string
+	SetActiveBootloaderSet(name string)
+	SaveBootloaderConfig() error
 }
 
-func NewHandler(store storage.Storage, dataDir string, isoDir string, bootDir string, version string) *Handler {
+type Handler struct {
+	storage            storage.Storage
+	dataDir            string
+	isoDir             string
+	bootDir            string
+	version            string
+	bootloaderSelector BootloaderSelector
+	toolsManager       *tools.Manager
+}
+
+func NewHandler(store storage.Storage, dataDir string, isoDir string, bootDir string, version string, blSelector BootloaderSelector, tm *tools.Manager) *Handler {
 	return &Handler{
-		storage: store,
-		dataDir: dataDir,
-		isoDir:  isoDir,
-		bootDir: bootDir,
-		version: version,
+		storage:            store,
+		dataDir:            dataDir,
+		isoDir:             isoDir,
+		bootDir:            bootDir,
+		version:            version,
+		bootloaderSelector: blSelector,
+		toolsManager:       tm,
 	}
 }
 
@@ -105,7 +117,25 @@ func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
 
 	mac := r.URL.Query().Get("mac")
 	if mac == "" {
-		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac parameter"})
+		// Try id param and look up by ID
+		idStr := r.URL.Query().Get("id")
+		if idStr != "" {
+			id, err := strconv.ParseUint(idStr, 10, 64)
+			if err != nil {
+				h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid id"})
+				return
+			}
+			clients, _ := h.storage.ListClients()
+			for _, c := range clients {
+				if c.ID == uint(id) {
+					h.sendJSON(w, http.StatusOK, Response{Success: true, Data: c})
+					return
+				}
+			}
+			h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Client not found"})
+			return
+		}
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac or id parameter"})
 		return
 	}
 
@@ -167,20 +197,18 @@ func (h *Handler) UpdateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if updates.Name != "" {
-		client.Name = updates.Name
-	}
-	if updates.Description != "" {
-		client.Description = updates.Description
-	}
+	client.Name = updates.Name
+	client.Description = updates.Description
 	client.Enabled = updates.Enabled
+	client.ShowPublicImages = updates.ShowPublicImages
+	client.BootloaderSet = updates.BootloaderSet
 
 	if err := h.storage.UpdateClient(mac, client); err != nil {
 		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
 		return
 	}
 
-	log.Printf("Admin: Client updated - MAC: %s, Name: %s, Enabled: %v", client.MACAddress, client.Name, client.Enabled)
+	log.Printf("Admin: Client updated - MAC: %s, Name: %s, Enabled: %v, ShowPublicImages: %v, BootloaderSet: %s", client.MACAddress, client.Name, client.Enabled, client.ShowPublicImages, client.BootloaderSet)
 	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Client updated", Data: client})
 }
 
@@ -991,9 +1019,55 @@ func (h *Handler) ScanImages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type Bootloader struct {
+type BootloaderFile struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+}
+
+type BootloaderSet struct {
+	Name  string           `json:"name"`
+	Files []BootloaderFile `json:"files"`
+}
+
+func (h *Handler) CreateBootloaderSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	if h.bootDir == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Boot directory not configured"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"})
+		return
+	}
+
+	setName := strings.TrimSpace(req.Name)
+	if setName == "" || setName == "built-in" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid set name"})
+		return
+	}
+	setName = filepath.Base(setName)
+
+	setDir := filepath.Join(h.bootDir, setName)
+	if _, err := os.Stat(setDir); err == nil {
+		h.sendJSON(w, http.StatusConflict, Response{Success: false, Error: "Set already exists"})
+		return
+	}
+
+	if err := os.MkdirAll(setDir, 0755); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to create set: %v", err)})
+		return
+	}
+
+	log.Printf("Admin: Created bootloader set: %s", setName)
+	h.sendJSON(w, http.StatusCreated, Response{Success: true, Message: fmt.Sprintf("Set '%s' created", setName)})
 }
 
 func (h *Handler) ListBootloaders(w http.ResponseWriter, r *http.Request) {
@@ -1002,53 +1076,65 @@ func (h *Handler) ListBootloaders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var bootloaders []Bootloader
+	var sets []BootloaderSet
 
-	if h.bootDir == "" {
-		h.sendJSON(w, http.StatusOK, Response{
-			Success: true,
-			Message: "No boot directory configured (using embedded bootloaders)",
-			Data:    bootloaders,
-		})
-		return
-	}
-
-	if err := os.MkdirAll(h.bootDir, 0755); err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to create boot directory: %v", err),
-		})
-		return
-	}
-
-	entries, err := os.ReadDir(h.bootDir)
-	if err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to read boot directory: %v", err),
-		})
-		return
-	}
-
-	for _, entry := range entries {
+	// Built-in set from embedded files
+	var embeddedFiles []BootloaderFile
+	embeddedEntries, _ := fs.ReadDir(bootloaders.Bootloaders, ".")
+	for _, entry := range embeddedEntries {
 		if entry.IsDir() {
 			continue
 		}
-
-		info, err := entry.Info()
-		if err != nil {
+		info, _ := entry.Info()
+		if info == nil {
 			continue
 		}
+		embeddedFiles = append(embeddedFiles, BootloaderFile{Name: entry.Name(), Size: info.Size()})
+	}
+	sets = append(sets, BootloaderSet{Name: "built-in", Files: embeddedFiles})
 
-		bootloaders = append(bootloaders, Bootloader{
-			Name: entry.Name(),
-			Size: info.Size(),
-		})
+	// Custom sets from subdirectories in bootDir
+	if h.bootDir != "" {
+		_ = os.MkdirAll(h.bootDir, 0755)
+		entries, err := os.ReadDir(h.bootDir)
+		if err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				setName := entry.Name()
+				setPath := filepath.Join(h.bootDir, setName)
+				fileEntries, err := os.ReadDir(setPath)
+				if err != nil {
+					continue
+				}
+				var files []BootloaderFile
+				for _, fe := range fileEntries {
+					if fe.IsDir() {
+						continue
+					}
+					info, _ := fe.Info()
+					if info == nil {
+						continue
+					}
+					files = append(files, BootloaderFile{Name: fe.Name(), Size: info.Size()})
+				}
+				sets = append(sets, BootloaderSet{Name: setName, Files: files})
+			}
+		}
+	}
+
+	activeSet := h.bootloaderSelector.GetActiveBootloaderSet()
+	if activeSet == "" {
+		activeSet = "built-in"
 	}
 
 	h.sendJSON(w, http.StatusOK, Response{
 		Success: true,
-		Data:    bootloaders,
+		Data: map[string]interface{}{
+			"sets":      sets,
+			"active":    activeSet,
+		},
 	})
 }
 
@@ -1066,15 +1152,8 @@ func (h *Handler) UploadBootloader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.MkdirAll(h.bootDir, 0755); err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to create boot directory: %v", err),
-		})
-		return
-	}
-
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
+	// 100MB total limit for multi-file upload
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
 		h.sendJSON(w, http.StatusBadRequest, Response{
 			Success: false,
 			Error:   fmt.Sprintf("Failed to parse form: %v", err),
@@ -1082,55 +1161,68 @@ func (h *Handler) UploadBootloader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		h.sendJSON(w, http.StatusBadRequest, Response{
-			Success: false,
-			Error:   "No file provided",
-		})
+	setName := r.FormValue("set")
+	if setName == "" || setName == "built-in" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Set name is required (cannot upload to built-in)"})
 		return
 	}
-	defer file.Close()
+	setName = filepath.Base(setName)
 
-	filename := filepath.Base(header.Filename)
-	if filename == "" || filename == "." || filename == ".." {
-		h.sendJSON(w, http.StatusBadRequest, Response{
-			Success: false,
-			Error:   "Invalid filename",
-		})
+	setDir := filepath.Join(h.bootDir, setName)
+	if _, err := os.Stat(setDir); os.IsNotExist(err) {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Set does not exist. Create it first."})
 		return
 	}
 
-	destPath := filepath.Join(h.bootDir, filename)
-	dest, err := os.Create(destPath)
-	if err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to create file: %v", err),
-		})
-		return
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		// Fallback: accept single "file" field for backwards compatibility
+		files = r.MultipartForm.File["file"]
 	}
-	defer dest.Close()
-
-	written, err := io.Copy(dest, file)
-	if err != nil {
-		os.Remove(destPath)
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to write file: %v", err),
-		})
+	if len(files) == 0 {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "No files provided"})
 		return
 	}
 
-	log.Printf("Uploaded bootloader: %s (%d bytes)", filename, written)
+	var uploaded []BootloaderFile
+	for _, header := range files {
+		filename := filepath.Base(header.Filename)
+		if filename == "" || filename == "." || filename == ".." {
+			continue
+		}
+
+		file, err := header.Open()
+		if err != nil {
+			h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to read file %s: %v", filename, err)})
+			return
+		}
+
+		destPath := filepath.Join(setDir, filename)
+		dest, err := os.Create(destPath)
+		if err != nil {
+			file.Close()
+			h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to create file %s: %v", filename, err)})
+			return
+		}
+
+		written, err := io.Copy(dest, file)
+		dest.Close()
+		file.Close()
+
+		if err != nil {
+			os.Remove(destPath)
+			h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to write file %s: %v", filename, err)})
+			return
+		}
+
+		log.Printf("Uploaded bootloader: %s/%s (%d bytes)", setName, filename, written)
+		uploaded = append(uploaded, BootloaderFile{Name: filename, Size: written})
+	}
 
 	h.sendJSON(w, http.StatusOK, Response{
 		Success: true,
-		Message: fmt.Sprintf("Bootloader uploaded successfully: %s (%d bytes)", filename, written),
-		Data: Bootloader{
-			Name: filename,
-			Size: written,
-		},
+		Message: fmt.Sprintf("Uploaded %d file(s) to set '%s'", len(uploaded), setName),
+		Data:    uploaded,
 	})
 }
 
@@ -1141,46 +1233,251 @@ func (h *Handler) DeleteBootloader(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.bootDir == "" {
-		h.sendJSON(w, http.StatusBadRequest, Response{
-			Success: false,
-			Error:   "Boot directory not configured",
-		})
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Boot directory not configured"})
 		return
 	}
+
+	setName := r.URL.Query().Get("set")
+	if setName == "" || setName == "built-in" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Cannot delete built-in set"})
+		return
+	}
+	setName = filepath.Base(setName)
 
 	filename := r.URL.Query().Get("name")
+
 	if filename == "" {
-		h.sendJSON(w, http.StatusBadRequest, Response{
-			Success: false,
-			Error:   "No filename provided",
-		})
+		// Delete entire set
+		setPath := filepath.Join(h.bootDir, setName)
+		if err := os.RemoveAll(setPath); err != nil {
+			h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to delete set: %v", err)})
+			return
+		}
+
+		// If this was the active set, revert to built-in
+		if h.bootloaderSelector.GetActiveBootloaderSet() == setName {
+			h.bootloaderSelector.SetActiveBootloaderSet("")
+			h.bootloaderSelector.SaveBootloaderConfig()
+		}
+
+		log.Printf("Deleted bootloader set: %s", setName)
+		h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("Set deleted: %s", setName)})
 		return
 	}
 
+	// Delete single file from set
 	filename = filepath.Base(filename)
-	if filename == "" || filename == "." || filename == ".." {
-		h.sendJSON(w, http.StatusBadRequest, Response{
-			Success: false,
-			Error:   "Invalid filename",
-		})
-		return
-	}
-
-	filePath := filepath.Join(h.bootDir, filename)
+	filePath := filepath.Join(h.bootDir, setName, filename)
 	if err := os.Remove(filePath); err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, Response{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to delete bootloader: %v", err),
-		})
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to delete file: %v", err)})
 		return
 	}
 
-	log.Printf("Deleted bootloader: %s", filename)
+	log.Printf("Deleted bootloader %s from set %s", filename, setName)
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("Deleted %s from %s", filename, setName)})
+}
 
+func (h *Handler) SelectBootloader(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		activeSet := h.bootloaderSelector.GetActiveBootloaderSet()
+		if activeSet == "" {
+			activeSet = "built-in"
+		}
+		h.sendJSON(w, http.StatusOK, Response{Success: true, Data: activeSet})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Set string `json:"set"` // "built-in" or set folder name
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request"})
+		return
+	}
+
+	setName := req.Set
+	if setName == "built-in" {
+		setName = ""
+	}
+
+	h.bootloaderSelector.SetActiveBootloaderSet(setName)
+	if err := h.bootloaderSelector.SaveBootloaderConfig(); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to save config: %v", err)})
+		return
+	}
+
+	displayName := req.Set
+	if displayName == "" {
+		displayName = "built-in"
+	}
+	log.Printf("Active bootloader set changed to: %s", displayName)
 	h.sendJSON(w, http.StatusOK, Response{
 		Success: true,
-		Message: fmt.Sprintf("Bootloader deleted: %s", filename),
+		Message: fmt.Sprintf("Active bootloader set: %s", displayName),
 	})
+}
+
+// Tools management
+func (h *Handler) ListTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	toolsList, err := h.storage.ListBootTools()
+	if err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	// Enrich with definition info and actual download status
+	type toolResponse struct {
+		*models.BootTool
+		DownloadURL string `json:"download_url"`
+	}
+	var result []toolResponse
+	for _, t := range toolsList {
+		tr := toolResponse{BootTool: t}
+		def := tools.GetDefinition(t.Name)
+		if def != nil {
+			tr.DownloadURL = def.DownloadURL
+		}
+		tr.Downloaded = h.toolsManager.IsDownloaded(t.Name)
+		result = append(result, tr)
+	}
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: result})
+}
+
+func (h *Handler) ToggleTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request"})
+		return
+	}
+
+	tool, err := h.storage.GetBootTool(req.Name)
+	if err != nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Tool not found"})
+		return
+	}
+
+	if req.Enabled && !h.toolsManager.IsDownloaded(req.Name) {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Tool must be downloaded before enabling"})
+		return
+	}
+
+	tool.Enabled = req.Enabled
+	if err := h.storage.SaveBootTool(tool); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	status := "disabled"
+	if req.Enabled {
+		status = "enabled"
+	}
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("%s %s", tool.DisplayName, status)})
+}
+
+func (h *Handler) DownloadTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Tool name required"})
+		return
+	}
+
+	def := tools.GetDefinition(name)
+	if def == nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Unknown tool"})
+		return
+	}
+
+	// Download in background, respond immediately
+	go func() {
+		if err := h.toolsManager.Download(name, nil); err != nil {
+			log.Printf("Tool download failed for %s: %v", name, err)
+		}
+	}()
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("Downloading %s...", def.DisplayName)})
+}
+
+func (h *Handler) DeleteTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Tool name required"})
+		return
+	}
+
+	if err := h.toolsManager.Delete(name); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Tool files deleted"})
+}
+
+func (h *Handler) UpdateToolURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request"})
+		return
+	}
+
+	tool, err := h.storage.GetBootTool(req.Name)
+	if err != nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Tool not found"})
+		return
+	}
+
+	tool.DownloadURL = req.URL
+	if err := h.storage.SaveBootTool(tool); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Download URL updated"})
+}
+
+func (h *Handler) ToolProgress(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Tool name required"})
+		return
+	}
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: h.toolsManager.GetProgress(name)})
 }
 
 func (h *Handler) GetServerInfo(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -30,7 +31,7 @@ func NewSQLiteStore(dataDir string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) AutoMigrate() error {
-	if err := s.db.AutoMigrate(&models.User{}, &models.Client{}, &models.ImageGroup{}, &models.Image{}, &models.BootLog{}, &models.CustomFile{}, &models.DriverPack{}, &models.MenuTheme{}); err != nil {
+	if err := s.db.AutoMigrate(&models.User{}, &models.Client{}, &models.ImageGroup{}, &models.Image{}, &models.BootLog{}, &models.CustomFile{}, &models.DriverPack{}, &models.MenuTheme{}, &models.BootTool{}); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -74,7 +75,9 @@ func (s *SQLiteStore) CreateClient(client *models.Client) error {
 }
 
 func (s *SQLiteStore) UpdateClient(mac string, client *models.Client) error {
-	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).Save(client).Error
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "UpdatedAt").
+		Updates(client).Error
 }
 
 func (s *SQLiteStore) DeleteClient(mac string) error {
@@ -121,8 +124,10 @@ func (s *SQLiteStore) AssignImagesToClient(mac string, imageFilenames []string) 
 		return err
 	}
 
-	client.AllowedImages = imageFilenames
-	return s.db.Save(&client).Error
+	allowed := models.StringSlice(imageFilenames)
+	return s.db.Model(&client).Select("AllowedImages").Updates(map[string]interface{}{
+		"allowed_images": allowed,
+	}).Error
 }
 
 func (s *SQLiteStore) GetClientImages(mac string) ([]string, error) {
@@ -411,15 +416,52 @@ func (s *SQLiteStore) ListImagesByGroup(groupID uint) ([]*models.Image, error) {
 func (s *SQLiteStore) GetImagesForClient(macAddress string) ([]models.Image, error) {
 	var client models.Client
 	if err := s.db.Where("mac_address = ? AND enabled = ?", macAddress, true).First(&client).Error; err == nil {
+		log.Printf("GetImagesForClient: client=%s, AllowedImages=%v, ShowPublicImages=%v", macAddress, client.AllowedImages, client.ShowPublicImages)
+		var assigned []models.Image
 		if len(client.AllowedImages) > 0 {
-			var images []models.Image
-			if err := s.db.Where("filename IN ? AND enabled = ?", client.AllowedImages, true).Find(&images).Error; err == nil {
-				return images, nil
+			s.db.Where("filename IN ? AND enabled = ?", client.AllowedImages, true).Find(&assigned)
+			if len(assigned) == 0 {
+				// Debug: list all image filenames to find the mismatch
+				var allImages []models.Image
+				s.db.Select("filename").Find(&allImages)
+				var fnames []string
+				for _, img := range allImages {
+					fnames = append(fnames, img.Filename)
+				}
+				log.Printf("GetImagesForClient: 0 matches for %v. DB filenames: %v", client.AllowedImages, fnames)
+			} else {
+				log.Printf("GetImagesForClient: found %d assigned images for %v", len(assigned), client.AllowedImages)
 			}
+		}
+
+		// If client has ShowPublicImages enabled, also include public images
+		if client.ShowPublicImages {
+			var publicImages []models.Image
+			s.db.Where("enabled = ? AND public = ?", true, true).Find(&publicImages)
+
+			// Merge, avoiding duplicates
+			seen := make(map[string]bool)
+			for _, img := range assigned {
+				seen[img.Filename] = true
+			}
+			for _, img := range publicImages {
+				if !seen[img.Filename] {
+					assigned = append(assigned, img)
+				}
+			}
+		}
+
+		if len(assigned) > 0 {
+			return assigned, nil
+		}
+
+		// Client exists but has no assigned images and public images are off
+		if !client.ShowPublicImages {
+			return []models.Image{}, nil
 		}
 	}
 
-	// Unknown client or no assigned images — show all public images
+	// Unknown client — show all public images
 	var images []models.Image
 	if err := s.db.Where("enabled = ? AND public = ?", true, true).Find(&images).Error; err != nil {
 		return nil, err
@@ -586,6 +628,26 @@ func (s *SQLiteStore) GetMenuTheme() (*models.MenuTheme, error) {
 func (s *SQLiteStore) UpdateMenuTheme(theme *models.MenuTheme) error {
 	theme.ID = 1
 	return s.db.Save(theme).Error
+}
+
+func (s *SQLiteStore) ListBootTools() ([]*models.BootTool, error) {
+	var tools []*models.BootTool
+	if err := s.db.Order("`order` ASC, name ASC").Find(&tools).Error; err != nil {
+		return nil, err
+	}
+	return tools, nil
+}
+
+func (s *SQLiteStore) GetBootTool(name string) (*models.BootTool, error) {
+	var tool models.BootTool
+	if err := s.db.Where("name = ?", name).First(&tool).Error; err != nil {
+		return nil, err
+	}
+	return &tool, nil
+}
+
+func (s *SQLiteStore) SaveBootTool(tool *models.BootTool) error {
+	return s.db.Save(tool).Error
 }
 
 func (s *SQLiteStore) Close() error {
