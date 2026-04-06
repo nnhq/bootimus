@@ -891,8 +891,20 @@ func (h *Handler) ExtractImage(w http.ResponseWriter, r *http.Request) {
 	image.BootMethod = "kernel"
 	image.KernelPath = bootFiles.Kernel
 	image.InitrdPath = bootFiles.Initrd
-	image.BootParams = strings.TrimSpace(bootFiles.BootParams)
 	image.SquashfsPath = bootFiles.SquashfsPath
+
+	// Use profile boot params if available, fall back to extractor params
+	if h.profileManager != nil && bootFiles.Distro != "" {
+		hasSquashfs := bootFiles.SquashfsPath != ""
+		profileParams := h.profileManager.GetBootParams(bootFiles.Distro, hasSquashfs)
+		if profileParams != "" {
+			image.BootParams = profileParams
+		} else {
+			image.BootParams = strings.TrimSpace(bootFiles.BootParams)
+		}
+	} else {
+		image.BootParams = strings.TrimSpace(bootFiles.BootParams)
+	}
 	image.ExtractionError = ""
 	image.ExtractedAt = &now
 	image.SanbootCompatible = sanbootCompatible

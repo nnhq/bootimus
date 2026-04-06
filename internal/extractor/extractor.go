@@ -310,13 +310,13 @@ func (e *Extractor) detectUbuntuDebian(img *iso9660.Image) (*BootFiles, error) {
 	if found := findKernelInitrd(img, "/casper", "vmlinuz", "initrd"); found != nil {
 		log.Printf("Found kernel/initrd in /casper using wildcard matching")
 		found.Distro = "ubuntu"
-		found.BootParams = "boot=casper "
+		found.BootParams = ""
 		return found, nil
 	}
 
 	if found := findCasperVariant(img); found != nil {
 		found.Distro = "ubuntu"
-		found.BootParams = "boot=casper "
+		found.BootParams = ""
 		return found, nil
 	}
 
@@ -334,20 +334,20 @@ func (e *Extractor) detectUbuntuDebian(img *iso9660.Image) (*BootFiles, error) {
 		distro     string
 		bootParams string
 	}{
-		{"/casper/vmlinuz", "/casper/initrd", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
-		{"/casper/vmlinuz", "/casper/initrd.lz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
-		{"/casper/vmlinuz", "/casper/initrd.gz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
-		{"/casper/vmlinuz.efi", "/casper/initrd.lz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
-		{"/casper/vmlinuz.efi", "/casper/initrd", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
-		{"/casper/vmlinuz.efi", "/casper/initrd.gz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled "},
+		{"/casper/vmlinuz", "/casper/initrd", "ubuntu", ""},
+		{"/casper/vmlinuz", "/casper/initrd.lz", "ubuntu", ""},
+		{"/casper/vmlinuz", "/casper/initrd.gz", "ubuntu", ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd.lz", "ubuntu", ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd", "ubuntu", ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd.gz", "ubuntu", ""},
 		{"/install/vmlinuz", "/install/initrd.gz", "ubuntu-installer", ""},
 		{"/install.amd/vmlinuz", "/install.amd/initrd.gz", "ubuntu-installer", ""},
 		{"/install/vmlinuz", "/install/initrd.gz", "debian", ""},
 		{"/install.amd/vmlinuz", "/install.amd/initrd.gz", "debian", ""},
-		{"/live/vmlinuz", "/live/initrd.img", "debian", "boot=live "},
-		{"/live/vmlinuz1", "/live/initrd1.img", "debian", "boot=live "},
-		{"/live/vmlinuz-*", "/live/initrd.img-*", "debian", "boot=live "},
-		{"/vmlinuz", "/initrd.img", "debian", "boot=live "},
+		{"/live/vmlinuz", "/live/initrd.img", "debian", ""},
+		{"/live/vmlinuz1", "/live/initrd1.img", "debian", ""},
+		{"/live/vmlinuz-*", "/live/initrd.img-*", "debian", ""},
+		{"/vmlinuz", "/initrd.img", "debian", ""},
 		{"/boot/linux26", "/boot/initrd.img", "debian", ""},
 	}
 
@@ -355,7 +355,7 @@ func (e *Extractor) detectUbuntuDebian(img *iso9660.Image) (*BootFiles, error) {
 		if strings.Contains(p.kernel, "*") {
 			if found := findKernelInitrd(img, "/live", "vmlinuz", "initrd.img"); found != nil {
 				found.Distro = "debian"
-				found.BootParams = "boot=live "
+				found.BootParams = ""
 				return found, nil
 			}
 		} else if fileExists(img, p.kernel) && fileExists(img, p.initrd) {
@@ -525,7 +525,7 @@ func (e *Extractor) detectArch(img *iso9660.Image) (*BootFiles, error) {
 			Kernel:     kernel,
 			Initrd:     initrd,
 			Distro:     "arch",
-			BootParams: "archisobasedir=arch ",
+			BootParams: "",
 		}, nil
 	}
 
@@ -569,7 +569,7 @@ func (e *Extractor) detectOpenSUSE(img *iso9660.Image) (*BootFiles, error) {
 			Kernel:     kernel,
 			Initrd:     initrd,
 			Distro:     "opensuse",
-			BootParams: "install=",
+			BootParams: "",
 		}, nil
 	}
 

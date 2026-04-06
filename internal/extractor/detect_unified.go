@@ -118,17 +118,17 @@ func (e *Extractor) detectUbuntuDebianUnified(reader FileSystemReader) (*BootFil
 		netboot    bool
 		netbootURL string
 	}{
-		{"/casper/vmlinuz", "/casper/initrd", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
-		{"/casper/vmlinuz", "/casper/initrd.lz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
-		{"/casper/vmlinuz", "/casper/initrd.gz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
-		{"/casper/vmlinuz.efi", "/casper/initrd.lz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
-		{"/casper/vmlinuz.efi", "/casper/initrd", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
-		{"/casper/vmlinuz.efi", "/casper/initrd.gz", "ubuntu", "boot=casper root=/dev/ram0 ramdisk_size=1500000 cloud-init=disabled ", false, ""},
+		{"/casper/vmlinuz", "/casper/initrd", "ubuntu", "", false, ""},
+		{"/casper/vmlinuz", "/casper/initrd.lz", "ubuntu", "", false, ""},
+		{"/casper/vmlinuz", "/casper/initrd.gz", "ubuntu", "", false, ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd.lz", "ubuntu", "", false, ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd", "ubuntu", "", false, ""},
+		{"/casper/vmlinuz.efi", "/casper/initrd.gz", "ubuntu", "", false, ""},
 		{"/install/vmlinuz", "/install/initrd.gz", "debian", "", true, "http://ftp.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/netboot.tar.gz"},
 		{"/install.amd/vmlinuz", "/install.amd/initrd.gz", "debian", "", true, "http://ftp.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/netboot.tar.gz"},
-		{"/live/vmlinuz", "/live/initrd.img", "debian", "boot=live ", false, ""},
-		{"/live/vmlinuz1", "/live/initrd1.img", "debian", "boot=live ", false, ""},
-		{"/vmlinuz", "/initrd.img", "debian", "boot=live ", false, ""},
+		{"/live/vmlinuz", "/live/initrd.img", "debian", "", false, ""},
+		{"/live/vmlinuz1", "/live/initrd1.img", "debian", "", false, ""},
+		{"/vmlinuz", "/initrd.img", "debian", "", false, ""},
 		{"/boot/linux26", "/boot/initrd.img", "debian", "", false, ""},
 	}
 
@@ -189,11 +189,11 @@ func (e *Extractor) detectArchUnified(reader FileSystemReader) (*BootFiles, erro
 		bootParams string
 	}{
 		// Standard Arch Linux
-		{"/arch/boot/x86_64/vmlinuz-linux", "/arch/boot/x86_64/initramfs-linux.img", "archisobasedir=arch "},
+		{"/arch/boot/x86_64/vmlinuz-linux", "/arch/boot/x86_64/initramfs-linux.img", ""},
 		// CachyOS and some Arch derivatives
-		{"/boot/vmlinuz-linux", "/boot/initramfs-linux.img", "archisobasedir=arch "},
+		{"/boot/vmlinuz-linux", "/boot/initramfs-linux.img", ""},
 		// EndeavourOS
-		{"/arch/boot/x86_64/vmlinuz-linux", "/arch/boot/x86_64/archiso.img", "archisobasedir=arch "},
+		{"/arch/boot/x86_64/vmlinuz-linux", "/arch/boot/x86_64/archiso.img", ""},
 		// Some derivatives use different kernel names
 		{"/boot/vmlinuz-linux-cachyos", "/boot/initramfs-linux-cachyos.img", ""},
 		{"/boot/vmlinuz-linux-zen", "/boot/initramfs-linux-zen.img", ""},
@@ -254,7 +254,7 @@ func (e *Extractor) detectOpenSUSEUnified(reader FileSystemReader) (*BootFiles, 
 			Kernel:     kernel,
 			Initrd:     initrd,
 			Distro:     "opensuse",
-			BootParams: "install=",
+			BootParams: "",
 		}, nil
 	}
 
@@ -271,9 +271,9 @@ func (e *Extractor) detectAlpineUnified(reader FileSystemReader) (*BootFiles, er
 		initrd     string
 		bootParams string
 	}{
-		{"/boot/vmlinuz-lts", "/boot/initramfs-lts", "modules=loop,squashfs,sd-mod,usb-storage quiet "},
-		{"/boot/vmlinuz-virt", "/boot/initramfs-virt", "modules=loop,squashfs,sd-mod,usb-storage quiet "},
-		{"/boot/vmlinuz", "/boot/initramfs-init", "modules=loop,squashfs,sd-mod,usb-storage quiet "},
+		{"/boot/vmlinuz-lts", "/boot/initramfs-lts", ""},
+		{"/boot/vmlinuz-virt", "/boot/initramfs-virt", ""},
+		{"/boot/vmlinuz", "/boot/initramfs-init", ""},
 	}
 	for _, p := range paths {
 		if reader.FileExists(p.kernel) && reader.FileExists(p.initrd) {
@@ -289,10 +289,10 @@ func (e *Extractor) detectGentooUnified(reader FileSystemReader) (*BootFiles, er
 		initrd     string
 		bootParams string
 	}{
-		{"/boot/gentoo", "/boot/gentoo.igz", "root=/dev/ram0 init=/linuxrc looptype=squashfs loop=/image.squashfs cdroot "},
-		{"/boot/vmlinuz", "/boot/initrd", "root=/dev/ram0 init=/linuxrc looptype=squashfs loop=/image.squashfs cdroot "},
-		{"/isolinux/gentoo", "/isolinux/gentoo.igz", "root=/dev/ram0 init=/linuxrc looptype=squashfs loop=/image.squashfs cdroot "},
-		{"/boot/gentoo64", "/boot/gentoo64.igz", "root=/dev/ram0 init=/linuxrc looptype=squashfs loop=/image.squashfs cdroot "},
+		{"/boot/gentoo", "/boot/gentoo.igz", ""},
+		{"/boot/vmlinuz", "/boot/initrd", ""},
+		{"/isolinux/gentoo", "/isolinux/gentoo.igz", ""},
+		{"/boot/gentoo64", "/boot/gentoo64.igz", ""},
 	}
 	for _, p := range paths {
 		if reader.FileExists(p.kernel) && reader.FileExists(p.initrd) {
@@ -312,7 +312,7 @@ func (e *Extractor) detectVoidUnified(reader FileSystemReader) (*BootFiles, erro
 	}
 	for _, p := range paths {
 		if reader.FileExists(p.kernel) && reader.FileExists(p.initrd) {
-			return &BootFiles{Kernel: p.kernel, Initrd: p.initrd, Distro: "void", BootParams: "boot=live "}, nil
+			return &BootFiles{Kernel: p.kernel, Initrd: p.initrd, Distro: "void", BootParams: ""}, nil
 		}
 	}
 	return nil, fmt.Errorf("not Void Linux")
@@ -345,7 +345,7 @@ func (e *Extractor) detectSolusUnified(reader FileSystemReader) (*BootFiles, err
 	}
 	for _, p := range paths {
 		if reader.FileExists(p.kernel) && reader.FileExists(p.initrd) {
-			return &BootFiles{Kernel: p.kernel, Initrd: p.initrd, Distro: "solus", BootParams: "root=live "}, nil
+			return &BootFiles{Kernel: p.kernel, Initrd: p.initrd, Distro: "solus"}, nil
 		}
 	}
 	return nil, fmt.Errorf("not Solus")

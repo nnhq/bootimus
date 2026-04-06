@@ -3416,8 +3416,7 @@ async function showImagePropertiesModal(filename) {
     document.getElementById('image-props-description').value = img.description || '';
     document.getElementById('image-props-order').value = img.order || 0;
     document.getElementById('image-props-boot-method').value = img.boot_method || 'sanboot';
-    document.getElementById('image-props-boot-params').value = img.boot_params || '';
-    document.getElementById('image-props-boot-params').placeholder = getDefaultBootParams(img) || 'Optional kernel parameters';
+    document.getElementById('image-props-boot-params').value = img.boot_params || getDefaultBootParams(img) || '';
     document.getElementById('image-props-redetect-btn').style.display = img.extracted ? '' : 'none';
     document.getElementById('image-props-enabled').checked = img.enabled;
     document.getElementById('image-props-public').checked = img.public;

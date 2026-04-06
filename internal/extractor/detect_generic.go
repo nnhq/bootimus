@@ -148,23 +148,9 @@ func parentDir(path string) string {
 // guessBootParams tries to infer appropriate boot parameters based on
 // what else is on the ISO (casper, live, arch layout, etc.)
 func guessBootParams(reader FileSystemReader, kernelPath string) string {
-	lower := strings.ToLower(kernelPath)
-
-	// Casper-based (Ubuntu family)
-	if strings.Contains(lower, "/casper/") {
-		return "boot=casper root=/dev/ram0 ramdisk_size=1500000 "
-	}
-
-	// Live systems
-	if strings.Contains(lower, "/live/") {
-		return "boot=live "
-	}
-
-	// Arch-based: check for airootfs or archiso marker
-	if reader.FileExists("/arch/x86_64/airootfs.sfs") ||
-		reader.FileExists("/arch/boot/syslinux/archiso_sys-linux.cfg") {
-		return "archisobasedir=arch "
-	}
+	// Boot params are now driven by distro profiles.
+	// Only fall back to syslinux/grub config parsing for truly unknown ISOs.
+	_ = kernelPath
 
 	// Check for syslinux configs that might contain boot params
 	// Common in many distros
