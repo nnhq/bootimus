@@ -10,7 +10,6 @@
       "initrd_paths": ["/casper/initrd", "/casper/initrd.lz", "/casper/initrd.gz"],
       "squashfs_paths": ["/casper/filesystem.squashfs"],
       "default_boot_params": "boot=casper initrd=initrd ip=dhcp url={{BASE_URL}}/isos/{{FILENAME}}",
-      "boot_params_with_squashfs": "boot=casper initrd=initrd ip=dhcp fetch={{SQUASHFS}}",
       "auto_install_type": "autoinstall"
     },
     {
