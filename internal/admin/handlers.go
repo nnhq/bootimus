@@ -603,6 +603,9 @@ func (h *Handler) UpdateImage(w http.ResponseWriter, r *http.Request) {
 	if bootMethod, ok := updates["boot_method"].(string); ok {
 		image.BootMethod = bootMethod
 	}
+	if distro, ok := updates["distro"].(string); ok {
+		image.Distro = distro
+	}
 	if bootParams, ok := updates["boot_params"].(string); ok {
 		image.BootParams = bootParams
 	}
@@ -954,29 +957,20 @@ func (h *Handler) RedetectImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-detect distro from filename
-	filenameLower := strings.ToLower(filename)
-	distroPatterns := map[string]string{
-		"popos": "popos", "pop-os": "popos", "pop_os": "popos",
-		"manjaro": "manjaro", "mint": "mint", "linuxmint": "mint",
-		"elementary": "elementary", "zorin": "zorin",
-		"ubuntu": "ubuntu", "debian": "debian", "arch": "arch",
-		"cachyos": "arch", "endeavouros": "arch", "garuda": "arch",
-		"fedora": "fedora", "centos": "centos", "rocky": "fedora",
-		"alma": "fedora", "nixos": "nixos", "opensuse": "opensuse",
-		"freebsd": "freebsd", "void": "void", "alpine": "alpine",
-		"gentoo": "gentoo", "windows": "windows", "proxmox": "debian",
-		"truenas": "debian",
-	}
-	detectedDistro := ""
-	for pattern, distro := range distroPatterns {
-		if strings.Contains(filenameLower, pattern) {
-			detectedDistro = distro
-			break
+	// Re-detect distro — try profile match first, keep existing distro as fallback
+	if h.profileManager != nil {
+		if profile, err := h.profileManager.MatchProfile(filename); err == nil {
+			image.Distro = profile.ProfileID
 		}
-	}
-	if detectedDistro != "" {
-		image.Distro = detectedDistro
+		// If filename didn't match, try matching on existing distro name
+		if image.Distro != "" {
+			if _, err := h.storage.GetDistroProfile(image.Distro); err != nil {
+				// Existing distro doesn't match a profile ID — try fuzzy match
+				if profile, err := h.profileManager.MatchProfile(image.Distro); err == nil {
+					image.Distro = profile.ProfileID
+				}
+			}
+		}
 	}
 
 	// Re-scan for squashfs in extracted directory
@@ -996,8 +990,13 @@ func (h *Handler) RedetectImage(w http.ResponseWriter, r *http.Request) {
 	})
 	image.SquashfsPath = squashfsPath
 
-	// Clear boot params so defaults are regenerated
-	image.BootParams = ""
+	// Set boot params from profile
+	if h.profileManager != nil && image.Distro != "" {
+		hasSquashfs := squashfsPath != ""
+		image.BootParams = h.profileManager.GetBootParams(image.Distro, hasSquashfs)
+	} else {
+		image.BootParams = ""
+	}
 
 	sanbootCompatible, sanbootHint := checkSanbootCompatibility(image.Distro, image.Filename)
 	image.SanbootCompatible = sanbootCompatible

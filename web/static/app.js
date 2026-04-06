@@ -3416,6 +3416,21 @@ async function showImagePropertiesModal(filename) {
     document.getElementById('image-props-description').value = img.description || '';
     document.getElementById('image-props-order').value = img.order || 0;
     document.getElementById('image-props-boot-method').value = img.boot_method || 'sanboot';
+
+    // Populate distro profile dropdown
+    const distroSelect = document.getElementById('image-props-distro');
+    distroSelect.innerHTML = '<option value="">Auto-detect</option>';
+    try {
+        const profRes = await authFetch(`${API_BASE}/profiles`);
+        const profData = await profRes.json();
+        if (profData.success && profData.data) {
+            for (const p of profData.data) {
+                const selected = img.distro === p.profile_id ? 'selected' : '';
+                distroSelect.innerHTML += `<option value="${p.profile_id}" ${selected}>${p.display_name}</option>`;
+            }
+        }
+    } catch (e) {}
+
     document.getElementById('image-props-boot-params').value = img.boot_params || getDefaultBootParams(img) || '';
     document.getElementById('image-props-redetect-btn').style.display = img.extracted ? '' : 'none';
     document.getElementById('image-props-enabled').checked = img.enabled;
@@ -3617,6 +3632,7 @@ async function saveImageProperties() {
     const groupId = document.getElementById('image-props-group').value;
     const order = parseInt(document.getElementById('image-props-order').value) || 0;
     const bootMethod = document.getElementById('image-props-boot-method').value;
+    const distro = document.getElementById('image-props-distro').value;
     const bootParams = document.getElementById('image-props-boot-params').value;
     const enabled = document.getElementById('image-props-enabled').checked;
     const isPublic = document.getElementById('image-props-public').checked;
@@ -3632,6 +3648,7 @@ async function saveImageProperties() {
         group_id: groupId ? parseInt(groupId) : null,
         order: order,
         boot_method: bootMethod,
+        distro: distro,
         boot_params: bootParams,
         enabled: enabled,
         public: isPublic

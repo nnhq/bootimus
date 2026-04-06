@@ -1438,13 +1438,21 @@
                     <input type="number" id="image-props-order" class="form-control" min="0" value="0">
                 </div>
 
-                <div class="form-group">
-                    <label>Boot Method</label>
-                    <select id="image-props-boot-method" class="form-control">
-                        <option value="sanboot">SAN Boot</option>
-                        <option value="kernel">Kernel/Initrd</option>
-                        <option value="nbd">NBD Mount</option>
-                    </select>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group">
+                        <label>Boot Method</label>
+                        <select id="image-props-boot-method" class="form-control">
+                            <option value="sanboot">SAN Boot</option>
+                            <option value="kernel">Kernel/Initrd</option>
+                            <option value="nbd">NBD Mount</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Distro Profile</label>
+                        <select id="image-props-distro" class="form-control">
+                            <option value="">Auto-detect</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="form-group">

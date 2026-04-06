@@ -71,16 +71,14 @@ func (m *Manager) SeedProfiles() error {
 				count++
 			}
 		} else if !existing.Custom {
-			// Update built-in profile if version changed
-			if existing.Version != pf.Version {
-				updated := profileDataToModel(p, pf.Version)
-				updated.ID = existing.ID
-				updated.CreatedAt = existing.CreatedAt
-				if err := m.store.SaveDistroProfile(updated); err != nil {
-					log.Printf("Profiles: Failed to update %s: %v", p.ID, err)
-				} else {
-					count++
-				}
+			// Always update built-in profiles on startup
+			updated := profileDataToModel(p, pf.Version)
+			updated.ID = existing.ID
+			updated.CreatedAt = existing.CreatedAt
+			if err := m.store.SaveDistroProfile(updated); err != nil {
+				log.Printf("Profiles: Failed to update %s: %v", p.ID, err)
+			} else {
+				count++
 			}
 		}
 		// Custom profiles are never overwritten
@@ -142,17 +140,18 @@ func (m *Manager) UpdateFromRemote() (added int, updated int, version string, er
 	return added, updated, pf.Version, nil
 }
 
-// MatchProfile finds the best matching profile for a given ISO filename.
+// MatchProfile finds the best matching profile for a given ISO filename or distro name.
+// Matching priority: custom patterns > built-in patterns > profile ID match > family match.
 func (m *Manager) MatchProfile(filename string) (*models.DistroProfile, error) {
-	profiles, err := m.store.ListDistroProfiles()
+	allProfiles, err := m.store.ListDistroProfiles()
 	if err != nil {
 		return nil, err
 	}
 
 	filenameLower := strings.ToLower(filename)
 
-	// Custom profiles take priority
-	for _, p := range profiles {
+	// Pass 1: Custom profiles — exact pattern match (highest priority)
+	for _, p := range allProfiles {
 		if p.Custom {
 			for _, pattern := range p.FilenamePatterns {
 				if strings.Contains(filenameLower, strings.ToLower(pattern)) {
@@ -162,14 +161,28 @@ func (m *Manager) MatchProfile(filename string) (*models.DistroProfile, error) {
 		}
 	}
 
-	// Then built-in profiles
-	for _, p := range profiles {
+	// Pass 2: Built-in profiles — exact pattern match
+	for _, p := range allProfiles {
 		if !p.Custom {
 			for _, pattern := range p.FilenamePatterns {
 				if strings.Contains(filenameLower, strings.ToLower(pattern)) {
 					return p, nil
 				}
 			}
+		}
+	}
+
+	// Pass 3: Profile ID match (e.g. filename or distro name contains "arch", "debian", etc.)
+	for _, p := range allProfiles {
+		if strings.Contains(filenameLower, strings.ToLower(p.ProfileID)) {
+			return p, nil
+		}
+	}
+
+	// Pass 4: Family match (e.g. distro name contains "redhat", "debian", etc.)
+	for _, p := range allProfiles {
+		if p.Family != "" && strings.Contains(filenameLower, strings.ToLower(p.Family)) {
+			return p, nil
 		}
 	}
 
