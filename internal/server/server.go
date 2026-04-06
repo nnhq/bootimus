@@ -60,18 +60,19 @@ func panicRecoveryMiddleware(next http.Handler) http.Handler {
 }
 
 type Config struct {
-	TFTPPort       int
-	TFTPSinglePort bool
-	HTTPPort       int
-	AdminPort      int
-	BootDir        string
-	DataDir        string
-	ISODir         string
-	ServerAddr     string
-	Storage        storage.Storage
-	Auth           *auth.Manager
-	NBDEnabled     bool
-	NBDPort        int
+	TFTPPort          int
+	TFTPSinglePort    bool
+	HTTPPort          int
+	AdminPort         int
+	BootDir           string
+	DataDir           string
+	ISODir            string
+	ServerAddr        string
+	Storage           storage.Storage
+	Auth              *auth.Manager
+	NBDEnabled        bool
+	NBDPort           int
+	WOLBroadcastAddr  string
 }
 
 type Server struct {
@@ -565,7 +566,7 @@ func (s *Server) startTFTPServer() error {
 
 # Auto-detect server IP and chain to dynamic menu
 dhcp
-chain http://${next-server}:%d/menu.ipxe?mac=${net0/mac} || goto failed
+chain http://${next-server}:%d/inventory?mac=${net0/mac}&cpu=${cpuid/0}&memsize=${memsize}&platform=${platform}&buildarch=${buildarch}&product=${product}&manufacturer=${manufacturer}&serial=${serial}&asset=${asset}&uuid=${uuid}&nic_chip=${net0/chip} || chain http://${next-server}:%d/menu.ipxe?mac=${net0/mac} || goto failed
 
 :failed
 echo Failed to load boot menu
@@ -574,7 +575,7 @@ echo MAC: ${net0/mac}
 echo Press any key to retry...
 prompt
 goto dhcp
-`, s.config.HTTPPort)
+`, s.config.HTTPPort, s.config.HTTPPort)
 				data := []byte(script)
 				log.Printf("TFTP: Serving dynamic autoexec.ipxe (HTTP port: %d)", s.config.HTTPPort)
 
@@ -694,6 +695,7 @@ func (s *Server) startHTTPServer() error {
 		http.Error(w, "Not found", http.StatusNotFound)
 	})
 
+	mux.HandleFunc("/inventory", s.handleInventoryReport)
 	mux.HandleFunc("/menu.ipxe", s.handleIPXEMenu)
 
 	// Serve tool files (GParted, Clonezilla, etc.)
@@ -869,7 +871,7 @@ func (s *Server) startAdminServer() error {
 func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 	log.Println("Setting up admin interface")
 
-	adminHandler := admin.NewHandler(s.config.Storage, s.config.DataDir, s.config.ISODir, s.config.BootDir, Version, s, s.toolsManager)
+	adminHandler := admin.NewHandler(s.config.Storage, s.config.DataDir, s.config.ISODir, s.config.BootDir, Version, s, s.toolsManager, s.config.WOLBroadcastAddr)
 
 	staticFS, err := fs.Sub(web.Static, "static")
 	if err != nil {
@@ -881,18 +883,36 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 
 	authWrap := func(handler http.HandlerFunc) http.HandlerFunc {
 		if useAuth {
-			return s.config.Auth.BasicAuthMiddleware(handler)
+			return s.config.Auth.JWTMiddleware(handler)
 		}
 		return handler
 	}
 
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	// Logout endpoint - returns 401 to clear Basic Auth
+	// Logout - redirect to login page
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Bootimus"`)
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Logged out successfully. Please close your browser or clear credentials."))
+		http.Redirect(w, r, "/", http.StatusFound)
+	})
+
+	// Auth info endpoint - returns available backends (no auth required)
+	mux.HandleFunc("/api/auth-info", func(w http.ResponseWriter, r *http.Request) {
+		if s.config.Auth != nil {
+			s.config.Auth.HandleAuthInfo(w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"success":true,"data":[{"id":"local","name":"Local"}]}`))
+		}
+	})
+
+	// Login endpoint - returns JWT token
+	mux.HandleFunc("/api/login", func(w http.ResponseWriter, r *http.Request) {
+		if s.config.Auth != nil {
+			s.config.Auth.HandleLogin(w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"success":true,"data":{"token":"","username":"admin","is_admin":true}}`))
+		}
 	})
 
 	mux.HandleFunc("/api/server-info", authWrap(adminHandler.GetServerInfo))
@@ -941,6 +961,12 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 		}
 	}))
 
+	mux.HandleFunc("/api/clients/wake", authWrap(adminHandler.WakeClient))
+	mux.HandleFunc("/api/clients/next-boot", authWrap(adminHandler.SetNextBootImage))
+	mux.HandleFunc("/api/clients/promote", authWrap(adminHandler.PromoteClient))
+	mux.HandleFunc("/api/clients/inventory", authWrap(adminHandler.GetClientInventory))
+	mux.HandleFunc("/api/clients/inventory/history", authWrap(adminHandler.GetClientInventoryHistory))
+
 	mux.HandleFunc("/api/bootloaders", authWrap(adminHandler.ListBootloaders))
 	mux.HandleFunc("/api/bootloaders/create", authWrap(adminHandler.CreateBootloaderSet))
 	mux.HandleFunc("/api/bootloaders/upload", authWrap(adminHandler.UploadBootloader))
@@ -954,6 +980,8 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tools/delete", authWrap(adminHandler.DeleteTool))
 	mux.HandleFunc("/api/tools/progress", authWrap(adminHandler.ToolProgress))
 	mux.HandleFunc("/api/tools/url", authWrap(adminHandler.UpdateToolURL))
+	mux.HandleFunc("/api/tools/custom", authWrap(adminHandler.CreateCustomTool))
+	mux.HandleFunc("/api/tools/custom/delete", authWrap(adminHandler.DeleteCustomTool))
 
 	mux.HandleFunc("/api/images/extract", authWrap(adminHandler.ExtractImage))
 	mux.HandleFunc("/api/images/boot-method", authWrap(adminHandler.SetBootMethod))
@@ -1119,12 +1147,73 @@ func (s *Server) handleAutoexec(w http.ResponseWriter, r *http.Request) {
 		macAddress = "${net0/mac}"
 	}
 
-	log.Printf("autoexec.ipxe requested, chaining to menu.ipxe")
+	log.Printf("autoexec.ipxe requested, chaining to inventory then menu.ipxe")
 
 	script := fmt.Sprintf(`#!ipxe
-chain http://%s:%d/menu.ipxe?mac=%s
-`, s.config.ServerAddr, s.config.HTTPPort, macAddress)
+params
+param mac %s
+param cpu ${cpuid/0}
+param memsize ${memsize}
+param platform ${platform}
+param buildarch ${buildarch}
+param product ${product}
+param manufacturer ${manufacturer}
+param serial ${serial}
+param asset ${asset}
+param uuid ${uuid}
+param nic_chip ${net0/chip}
+chain http://%s:%d/inventory##params || chain http://%s:%d/menu.ipxe?mac=%s
+`, macAddress, s.config.ServerAddr, s.config.HTTPPort, s.config.ServerAddr, s.config.HTTPPort, macAddress)
 
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(script))
+}
+
+func (s *Server) handleInventoryReport(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+
+	mac := strings.ToLower(strings.ReplaceAll(r.FormValue("mac"), "-", ":"))
+	if mac == "" || mac == "${net0/mac}" {
+		// No valid MAC — just redirect to menu
+		http.Redirect(w, r, fmt.Sprintf("/menu.ipxe?mac=unknown"), http.StatusTemporaryRedirect)
+		return
+	}
+
+	// Parse memory (iPXE memsize is in bytes, may be hex or decimal)
+	var memBytes int64
+	if ms := r.FormValue("memsize"); ms != "" {
+		if strings.HasPrefix(ms, "0x") || strings.HasPrefix(ms, "0X") {
+			fmt.Sscanf(ms, "%v", &memBytes)
+		} else {
+			fmt.Sscanf(ms, "%d", &memBytes)
+		}
+	}
+
+	inv := &models.HardwareInventory{
+		MACAddress:   mac,
+		IPAddress:    r.RemoteAddr,
+		CPU:          r.FormValue("cpu"),
+		Memory:       memBytes,
+		Platform:     r.FormValue("platform"),
+		BuildArch:    r.FormValue("buildarch"),
+		Product:      r.FormValue("product"),
+		Manufacturer: r.FormValue("manufacturer"),
+		Serial:       r.FormValue("serial"),
+		Asset:        r.FormValue("asset"),
+		UUID:         r.FormValue("uuid"),
+		NICChip:      r.FormValue("nic_chip"),
+	}
+
+	if s.config.Storage != nil {
+		if err := s.config.Storage.SaveHardwareInventory(inv); err != nil {
+			log.Printf("Inventory: Failed to save for %s: %v", mac, err)
+		} else {
+			log.Printf("Inventory: Saved hardware info for %s (product: %s, manufacturer: %s, memory: %d)", mac, inv.Product, inv.Manufacturer, inv.Memory)
+		}
+	}
+
+	// Return iPXE script that chains to the boot menu
+	script := fmt.Sprintf("#!ipxe\nchain http://%s:%d/menu.ipxe?mac=%s\n", s.config.ServerAddr, s.config.HTTPPort, mac)
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(script))
 }
@@ -1138,6 +1227,22 @@ func (s *Server) handleIPXEMenu(w http.ResponseWriter, r *http.Request) {
 	macAddress = strings.ToLower(strings.ReplaceAll(macAddress, "-", ":"))
 
 	s.logAndBroadcast("Client Connected: MAC %s (IP: %s) requesting boot menu", macAddress, r.RemoteAddr)
+
+	// Check for one-time next boot image
+	var nextBootImageID uint
+	if s.config.Storage != nil {
+		client, err := s.config.Storage.GetClient(macAddress)
+		if err == nil && client.NextBootImage != "" {
+			img, imgErr := s.config.Storage.GetImage(client.NextBootImage)
+			if imgErr == nil && img.Enabled {
+				s.logAndBroadcast("Client %s: next boot action set - pre-selecting %s", macAddress, img.Name)
+				nextBootImageID = img.ID
+				s.config.Storage.ClearNextBootImage(macAddress)
+			} else {
+				s.config.Storage.ClearNextBootImage(macAddress)
+			}
+		}
+	}
 
 	var images []models.Image
 	var err error
@@ -1154,7 +1259,7 @@ func (s *Server) handleIPXEMenu(w http.ResponseWriter, r *http.Request) {
 		images = convertISOsToImages(isos)
 	}
 
-	menu := s.generateIPXEMenuWithGroups(images, macAddress)
+	menu := s.generateIPXEMenuWithGroups(images, macAddress, nextBootImageID)
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(menu))
 }

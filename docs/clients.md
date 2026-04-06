@@ -19,10 +19,22 @@ Bootimus uses MAC address-based access control to manage which clients can boot 
 ### Key Concepts
 
 - **Client**: A network boot device identified by MAC address
+- **Static client**: Manually created or promoted from discovered - a permanent registration
+- **Discovered client**: Automatically created when an unknown device PXE boots (like a DHCP lease)
 - **Enabled**: Client is allowed to boot (shows in boot menu)
 - **Disabled**: Client cannot boot (blocked from accessing boot menu)
 - **Assigned Images**: When a client has images assigned, it sees **only those images** (not the full public list)
-- **Unregistered/No Assignments**: Clients with no assignments (or unknown clients) see all public images
+- **Show Public Images**: When enabled alongside assigned images, client sees both assigned and public images
+- **Next Boot Action**: A one-time boot image override that auto-clears after use
+
+### Client Auto-Discovery
+
+When an unknown device PXE boots, Bootimus automatically creates a **discovered** client record with:
+- MAC address from the PXE request
+- Hardware inventory (CPU, memory, manufacturer, serial number, NIC)
+- Enabled with public images visible by default
+
+Discovered clients appear in the clients table with a "Discovered" badge. You can promote them to static clients using the **"Make Static"** button, which registers them as permanent entries. If a previously deleted client PXE boots again, it is automatically restored.
 
 ### Database Modes
 
@@ -53,7 +65,7 @@ Bootimus uses MAC address-based access control to manage which clients can boot 
 ### Via API
 
 ```bash
-curl -u admin:password -X POST http://localhost:8081/api/clients \
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients \
   -H "Content-Type: application/json" \
   -d '{
     "mac_address": "00:11:22:33:44:55",
@@ -83,7 +95,7 @@ All formats are normalized to colon-separated lowercase.
 
 **Via API**:
 ```bash
-curl -u admin:password -X POST http://localhost:8081/api/clients/assign \
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients/assign \
   -H "Content-Type: application/json" \
   -d '{
     "mac_address": "00:11:22:33:44:55",
@@ -103,7 +115,7 @@ curl -u admin:password -X POST http://localhost:8081/api/clients/assign \
 **Via API**:
 ```bash
 # Get client details including assigned images
-curl -u admin:password "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
 ```
 
 **Response**:
@@ -140,7 +152,7 @@ Public images are available to **all clients**, even unregistered ones.
 
 **Make image public**:
 ```bash
-curl -u admin:password -X PUT "http://localhost:8081/api/images?filename=ubuntu.iso" \
+curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/images?filename=ubuntu.iso" \
   -H "Content-Type: application/json" \
   -d '{"public": true}'
 ```
@@ -157,7 +169,7 @@ Private images are **only available to assigned clients**.
 
 **Make image private**:
 ```bash
-curl -u admin:password -X PUT "http://localhost:8081/api/images?filename=windows.iso" \
+curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/images?filename=windows.iso" \
   -H "Content-Type: application/json" \
   -d '{"public": false}'
 ```
@@ -187,10 +199,10 @@ Bootimus tracks boot statistics for each client:
 **Via API**:
 ```bash
 # Get all clients with statistics
-curl -u admin:password http://localhost:8081/api/clients | jq '.data[] | {name, boot_count, last_boot}'
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/clients | jq '.data[] | {name, boot_count, last_boot}'
 
 # Get top clients by boot count
-curl -u admin:password http://localhost:8081/api/clients | \
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/clients | \
   jq '.data | sort_by(.boot_count) | reverse | .[0:10] | .[] | {name, boot_count}'
 ```
 
@@ -200,7 +212,7 @@ View detailed boot logs per client:
 
 ```bash
 # Filter boot logs by MAC address
-curl -u admin:password http://localhost:8081/api/logs | \
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/logs | \
   jq '.data[] | select(.mac_address=="00:11:22:33:44:55")'
 ```
 
@@ -226,7 +238,7 @@ CLIENTS=(
 for entry in "${CLIENTS[@]}"; do
   IFS=':' read -r mac name description <<< "$entry"
 
-  curl -u admin:$ADMIN_PASSWORD -X POST http://localhost:8081/api/clients \
+  curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients \
     -H "Content-Type: application/json" \
     -d "{
       \"mac_address\":\"$mac\",
@@ -258,7 +270,7 @@ SERVER_MACS=(
 IMAGES='["ubuntu-24.04-live-server-amd64.iso","debian-13.2.0-amd64-netinst.iso"]'
 
 for mac in "${SERVER_MACS[@]}"; do
-  curl -u admin:$ADMIN_PASSWORD -X POST http://localhost:8081/api/clients/assign \
+  curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients/assign \
     -H "Content-Type: application/json" \
     -d "{\"mac_address\":\"$mac\",\"image_filenames\":$IMAGES}"
 
@@ -275,11 +287,11 @@ done
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-your-password}"
 
 # Get all clients and enable them
-macs=$(curl -u admin:$ADMIN_PASSWORD -s http://localhost:8081/api/clients | \
+macs=$(curl -H "Authorization: Bearer $TOKEN" -s http://localhost:8081/api/clients | \
   jq -r '.data[].mac_address')
 
 for mac in $macs; do
-  curl -u admin:$ADMIN_PASSWORD -X PUT "http://localhost:8081/api/clients?mac=$mac" \
+  curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/clients?mac=$mac" \
     -H "Content-Type: application/json" \
     -d '{"enabled":true}'
   echo "Enabled $mac"
@@ -296,7 +308,7 @@ ADMIN_PASSWORD="${ADMIN_PASSWORD:-your-password}"
 
 echo "MAC Address,Name,Description,Enabled,Boot Count,Last Boot"
 
-curl -u admin:$ADMIN_PASSWORD -s http://localhost:8081/api/clients | \
+curl -H "Authorization: Bearer $TOKEN" -s http://localhost:8081/api/clients | \
   jq -r '.data[] | [.mac_address, .name, .description, .enabled, .boot_count, .last_boot] | @csv'
 ```
 
@@ -317,7 +329,7 @@ tail -n +2 "$CSV_FILE" | while IFS=',' read -r mac name description enabled; do
   description=$(echo $description | tr -d '"')
   enabled=$(echo $enabled | tr -d '"')
 
-  curl -u admin:$ADMIN_PASSWORD -X POST http://localhost:8081/api/clients \
+  curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients \
     -H "Content-Type: application/json" \
     -d "{
       \"mac_address\":\"$mac\",
@@ -328,6 +340,71 @@ tail -n +2 "$CSV_FILE" | while IFS=',' read -r mac name description enabled; do
 
   echo "Imported $name ($mac)"
 done
+```
+
+## Next Boot Action
+
+Set a one-time boot image for a client. On the next PXE boot, the selected image will be pre-selected as the default menu item with a timeout. The action auto-clears after use - subsequent boots return to normal.
+
+### Via Web Interface
+
+1. Click **"Next Boot"** on a client row
+2. Select an image from the dropdown
+3. Click **"Set Next Boot"** to just set the image, or **"Set & Wake"** to also send a Wake-on-LAN packet
+
+### Via API
+
+```bash
+# Set next boot image
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients/next-boot \
+  -H "Content-Type: application/json" \
+  -d '{"mac_address":"00:11:22:33:44:55","image_filename":"ubuntu-24.04.iso"}'
+
+# Clear next boot action
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients/next-boot \
+  -H "Content-Type: application/json" \
+  -d '{"mac_address":"00:11:22:33:44:55","image_filename":""}'
+```
+
+### Behaviour
+
+- The boot menu is displayed as normal but with the next boot image pre-selected as default
+- If the global menu timeout is disabled (set to 0), a 10-second timeout is applied as an override
+- If the client doesn't boot before the action is consumed, the next boot clears on the first PXE request
+- Empty groups are hidden from the menu when a client has assigned images
+
+## Wake-on-LAN
+
+Send a WOL magic packet to wake a client remotely. Combine with **Next Boot** to wake a machine and have it boot into a specific image.
+
+### Via API
+
+```bash
+# Wake a client
+curl -H "Authorization: Bearer $TOKEN" -X POST "http://localhost:8081/api/clients/wake?mac=00:11:22:33:44:55"
+
+# Wake with custom broadcast address
+curl -H "Authorization: Bearer $TOKEN" -X POST "http://localhost:8081/api/clients/wake?mac=00:11:22:33:44:55" \
+  -H "Content-Type: application/json" \
+  -d '{"broadcast_addr":"192.168.1.255"}'
+```
+
+## Hardware Inventory
+
+Bootimus collects hardware information from PXE clients during boot, including:
+- CPU, memory, platform, and architecture
+- Manufacturer, product name, and serial number
+- UUID and NIC chip info
+- IP address
+
+View inventory from the **Edit & Assign Images** modal for any client, or use the API:
+
+```bash
+# Latest inventory
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients/inventory?mac=00:11:22:33:44:55"
+
+# Inventory history
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients/inventory/history?mac=00:11:22:33:44:55&limit=10"
 ```
 
 ## Troubleshooting
@@ -345,18 +422,18 @@ done
 **Solution**:
 ```bash
 # Check client status
-curl -u admin:password "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
 
 # Enable client
-curl -u admin:password -X PUT "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" \
+curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}'
 
 # Check available images
-curl -u admin:password http://localhost:8081/api/images | jq '.data[] | {filename, enabled, public}'
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/images | jq '.data[] | {filename, enabled, public}'
 
 # Make images public
-curl -u admin:password -X PUT "http://localhost:8081/api/images?filename=ubuntu.iso" \
+curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/images?filename=ubuntu.iso" \
   -H "Content-Type: application/json" \
   -d '{"public":true,"enabled":true}'
 ```
@@ -372,7 +449,7 @@ curl -u admin:password -X PUT "http://localhost:8081/api/images?filename=ubuntu.
 **Solution**:
 ```bash
 # Check boot logs for actual IP address
-curl -u admin:password http://localhost:8081/api/logs | jq '.data[] | {mac_address, ip_address}'
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/logs | jq '.data[] | {mac_address, ip_address}'
 
 # Register client by IP if MAC is unknown
 # (Note: Less reliable, IP may change)
@@ -391,14 +468,14 @@ curl -u admin:password http://localhost:8081/api/logs | jq '.data[] | {mac_addre
 **Solution**:
 ```bash
 # Verify client exists and is enabled
-curl -u admin:password "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | jq
 
 # Verify image assignments
-curl -u admin:password "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | \
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" | \
   jq '.data.allowed_images'
 
 # Re-assign images
-curl -u admin:password -X POST http://localhost:8081/api/clients/assign \
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/clients/assign \
   -H "Content-Type: application/json" \
   -d '{
     "mac_address":"00:11:22:33:44:55",
@@ -418,16 +495,16 @@ sqlite3 data/bootimus.db "SELECT * FROM clients WHERE mac_address='00:11:22:33:4
 **Solution**:
 ```bash
 # Find existing client
-curl -u admin:password http://localhost:8081/api/clients | \
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/clients | \
   jq '.data[] | select(.mac_address=="00:11:22:33:44:55")'
 
 # Update existing client instead
-curl -u admin:password -X PUT "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" \
+curl -H "Authorization: Bearer $TOKEN" -X PUT "http://localhost:8081/api/clients?mac=00:11:22:33:44:55" \
   -H "Content-Type: application/json" \
   -d '{"name":"Updated Name","enabled":true}'
 
 # Or delete and re-create
-curl -u admin:password -X DELETE "http://localhost:8081/api/clients?mac=00:11:22:33:44:55"
+curl -H "Authorization: Bearer $TOKEN" -X DELETE "http://localhost:8081/api/clients?mac=00:11:22:33:44:55"
 ```
 
 ## Next Steps

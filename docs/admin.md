@@ -24,7 +24,7 @@ http://your-server:8081/
 **Requirements**:
 - Admin interface runs on separate port (default 8081)
 - Works with SQLite or PostgreSQL
-- HTTP Basic Authentication required
+- JWT token-based authentication (with optional LDAP/AD backend)
 
 ### First-Time Login
 
@@ -34,17 +34,21 @@ On first startup, Bootimus generates a random admin password:
 ╔════════════════════════════════════════════════════════════════╗
 ║                    ADMIN PASSWORD GENERATED                    ║
 ╠════════════════════════════════════════════════════════════════╣
+║  Username: admin                                                ║
 ║  Password: AbCdEfGh1234567890-_XyZ123456                       ║
 ╠════════════════════════════════════════════════════════════════╣
-║  Saved to: /path/to/.admin_password                            ║
 ║  This password will NOT be shown again!                        ║
-║  Save it now or retrieve it from the file above.               ║
+║  Save it now or reset it using --reset-admin-password flag    ║
 ╚════════════════════════════════════════════════════════════════╝
 ```
 
+Navigate to `http://your-server:8081` and you'll see a dedicated login page. Enter the admin credentials to access the panel.
+
 **Login credentials**:
 - **Username**: `admin`
-- **Password**: Check server logs or `.admin_password` file
+- **Password**: Check server startup logs
+
+If LDAP is configured, a dropdown will appear on the login page allowing you to choose between local and LDAP authentication. See [Authentication Guide](authentication.md) for details.
 
 ### Quick Start
 

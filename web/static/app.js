@@ -1,6 +1,125 @@
 // API Base URL
 const API_BASE = '/api';
 
+// Auth
+function getToken() {
+    return localStorage.getItem('bootimus_token');
+}
+
+function setToken(token) {
+    localStorage.setItem('bootimus_token', token);
+}
+
+function clearToken() {
+    localStorage.removeItem('bootimus_token');
+    localStorage.removeItem('bootimus_username');
+    localStorage.removeItem('bootimus_is_admin');
+}
+
+async function authFetch(url, options = {}) {
+    const token = getToken();
+    if (token) {
+        options.headers = options.headers || {};
+        options.headers['Authorization'] = 'Bearer ' + token;
+    }
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+        clearToken();
+        showLoginScreen();
+        throw new Error('Authentication required');
+    }
+    return res;
+}
+
+async function showLoginScreen() {
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('main-header').style.display = 'none';
+    document.getElementById('main-app').style.display = 'none';
+    document.getElementById('login-error').style.display = 'none';
+
+    // Load available auth backends
+    try {
+        const res = await fetch(`${API_BASE}/auth-info`);
+        const data = await res.json();
+        if (data.success && data.data && data.data.length > 1) {
+            const select = document.getElementById('login-auth-method');
+            select.innerHTML = data.data.map(b =>
+                `<option value="${b.id}">${b.name}</option>`
+            ).join('');
+            document.getElementById('login-auth-selector').style.display = 'block';
+        } else {
+            document.getElementById('login-auth-selector').style.display = 'none';
+        }
+    } catch (e) {
+        document.getElementById('login-auth-selector').style.display = 'none';
+    }
+
+    document.getElementById('login-username').focus();
+}
+
+function showApp() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('main-header').style.display = '';
+    document.getElementById('main-app').style.display = '';
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+    const authMethod = document.getElementById('login-auth-method').value || 'local';
+    const errorDiv = document.getElementById('login-error');
+
+    try {
+        const res = await fetch(`${API_BASE}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, auth_method: authMethod })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            setToken(data.data.token);
+            localStorage.setItem('bootimus_username', data.data.username);
+            localStorage.setItem('bootimus_is_admin', data.data.is_admin);
+            showApp();
+            initApp();
+        } else {
+            errorDiv.textContent = data.error || 'Login failed';
+            errorDiv.style.display = 'block';
+        }
+    } catch (err) {
+        errorDiv.textContent = 'Connection error';
+        errorDiv.style.display = 'block';
+    }
+}
+
+function logout() {
+    clearToken();
+    showLoginScreen();
+    document.getElementById('login-form').reset();
+}
+
+async function checkAuth() {
+    const token = getToken();
+    if (!token) {
+        showLoginScreen();
+        return;
+    }
+
+    try {
+        const res = await authFetch(`${API_BASE}/stats`);
+        if (res.ok) {
+            showApp();
+            initApp();
+        } else {
+            showLoginScreen();
+        }
+    } catch {
+        showLoginScreen();
+    }
+}
+
 // State
 let clients = [];
 let images = [];
@@ -59,50 +178,11 @@ document.addEventListener('click', (e) => {
     }
 });
 
-async function loadCurrentUser() {
-    try {
-        // We'll need to get the current user info from the auth context
-        // For now, we can extract it from Basic Auth header or create an endpoint
-        const username = getCurrentUsername();
-        document.getElementById('current-username').textContent = username;
-
-        // Check if user is admin by trying to access admin-only endpoint
-        try {
-            const res = await fetch(`${API_BASE}/users`);
-            if (res.ok) {
-                document.getElementById('current-user-role').textContent = 'Administrator';
-            } else {
-                document.getElementById('current-user-role').textContent = 'User';
-            }
-        } catch (err) {
-            document.getElementById('current-user-role').textContent = 'User';
-        }
-    } catch (err) {
-        console.error('Failed to load user info:', err);
-    }
-}
-
-function getCurrentUsername() {
-    // Try to get username from localStorage if we stored it during login
-    const stored = localStorage.getItem('bootimus_username');
-    if (stored) return stored;
-
-    // Otherwise return a default
-    return 'admin';
-}
-
-function logout() {
-    // Clear any stored credentials
-    localStorage.removeItem('bootimus_username');
-
-    // Show notification
-    showNotification('Logging out...', 'info');
-
-    // Redirect to logout endpoint which will clear Basic Auth
-    // Since we use Basic Auth, we need to send invalid credentials to force re-auth
-    setTimeout(() => {
-        window.location.href = '/logout';
-    }, 500);
+function loadCurrentUser() {
+    const username = localStorage.getItem('bootimus_username') || 'admin';
+    const isAdmin = localStorage.getItem('bootimus_is_admin') === 'true';
+    document.getElementById('current-username').textContent = username;
+    document.getElementById('current-user-role').textContent = isAdmin ? 'Administrator' : 'User';
 }
 
 function showNotification(message, type = 'info') {
@@ -171,12 +251,12 @@ function showNotification(message, type = 'info') {
     }, 4000);
 }
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    loadSavedTheme();
-    setupTabs();
-    setupForms();
-    setupUpload();
+let appInitialized = false;
+
+function initApp() {
+    if (appInitialized) return;
+    appInitialized = true;
+
     loadCurrentUser();
     loadStats();
     loadServerInfo();
@@ -185,8 +265,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPublicFiles();
     loadLogs();
     loadUsers();
-
-    // Load active sessions
     loadActiveSessions();
 
     // Refresh every 30 seconds
@@ -209,6 +287,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Refresh active sessions more frequently (every 3 seconds)
     setInterval(loadActiveSessions, 3000);
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadSavedTheme();
+    setupTabs();
+    setupForms();
+    setupUpload();
+    document.getElementById('login-form').addEventListener('submit', handleLogin);
+    checkAuth();
 });
 
 // Tab Management
@@ -245,7 +333,7 @@ function setupTabs() {
 // Stats
 async function loadStats() {
     try {
-        const res = await fetch(`${API_BASE}/stats`);
+        const res = await authFetch(`${API_BASE}/stats`);
         const data = await res.json();
 
         if (data.success) {
@@ -263,7 +351,7 @@ async function loadStats() {
 // Active Sessions
 async function loadActiveSessions() {
     try {
-        const res = await fetch(`${API_BASE}/active-sessions`);
+        const res = await authFetch(`${API_BASE}/active-sessions`);
         const sessions = await res.json();
 
         const panel = document.getElementById('active-sessions-panel');
@@ -325,7 +413,7 @@ function formatBytes(bytes) {
 // Server Info
 async function loadServerInfo() {
     try {
-        const res = await fetch(`${API_BASE}/server-info`);
+        const res = await authFetch(`${API_BASE}/server-info`);
         const data = await res.json();
 
         if (data.success) {
@@ -344,6 +432,12 @@ function renderServerInfo(info) {
         if (pct > 80) return 'var(--danger)';
         if (pct > 60) return 'var(--warning)';
         return 'var(--teal)';
+    }
+
+    // Update version in sidebar and about modal
+    if (info.version) {
+        document.getElementById('sidebar-version').textContent = 'v' + info.version;
+        document.getElementById('about-version').textContent = 'Version ' + info.version;
     }
 
     // Build running status grid cells
@@ -447,9 +541,28 @@ function formatBytes(bytes) {
 }
 
 // Clients
+let clientsAutoRefreshInterval = null;
+
+function toggleClientsAutoRefresh() {
+    const btn = document.getElementById('clients-autorefresh-btn');
+    if (clientsAutoRefreshInterval) {
+        clearInterval(clientsAutoRefreshInterval);
+        clientsAutoRefreshInterval = null;
+        btn.textContent = 'Auto-Refresh: Off';
+        btn.classList.remove('btn-danger');
+        btn.classList.add('btn-success');
+    } else {
+        loadClients();
+        clientsAutoRefreshInterval = setInterval(loadClients, 5000);
+        btn.textContent = 'Auto-Refresh: On';
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-danger');
+    }
+}
+
 async function loadClients() {
     try {
-        const res = await fetch(`${API_BASE}/clients`);
+        const res = await authFetch(`${API_BASE}/clients`);
         const data = await res.json();
 
         if (data.success) {
@@ -476,6 +589,7 @@ function renderClientsTable() {
                 <tr>
                     <th>MAC Address</th>
                     <th>Name</th>
+                    <th>Type</th>
                     <th>Status</th>
                     <th>Bootloader</th>
                     <th>Assigned Images</th>
@@ -489,6 +603,11 @@ function renderClientsTable() {
                     <tr>
                         <td><code>${client.mac_address}</code></td>
                         <td>${client.name || '-'}</td>
+                        <td>
+                            <span class="badge ${client.static ? 'badge-success' : 'badge-info'}">
+                                ${client.static ? 'Static' : 'Discovered'}
+                            </span>
+                        </td>
                         <td>
                             <span class="badge ${client.enabled ? 'badge-success' : 'badge-danger'}">
                                 ${client.enabled ? 'Enabled' : 'Disabled'}
@@ -507,8 +626,14 @@ function renderClientsTable() {
                             }
                         </td>
                         <td>${client.boot_count || 0}</td>
-                        <td>${client.last_boot ? new Date(client.last_boot).toLocaleString() : 'Never'}</td>
                         <td>
+                            ${client.last_boot ? new Date(client.last_boot).toLocaleString() : 'Never'}
+                            ${client.next_boot_image ? '<br><span class="badge badge-info" title="' + escapeHtml(client.next_boot_image) + '">Next: ' + escapeHtml(client.next_boot_image) + '</span>' : ''}
+                        </td>
+                        <td>
+                            ${!client.static ? '<button class="btn btn-success btn-sm" onclick="promoteClient(\'' + client.mac_address + '\')">Make Static</button>' : ''}
+                            <button class="btn btn-success btn-sm" onclick="wakeClient('${client.mac_address}')">Wake</button>
+                            <button class="btn btn-primary btn-sm" onclick="showNextBoot('${client.mac_address}')">Next Boot</button>
                             <button class="btn btn-primary btn-sm" onclick="editClient('${client.mac_address}')">Edit & Assign Images</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteClient('${client.mac_address}')">Delete</button>
                         </td>
@@ -529,7 +654,7 @@ function showAddClientModal() {
 
 async function editClient(mac) {
     try {
-        const res = await fetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`);
+        const res = await authFetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`);
         const data = await res.json();
 
         console.log('GetClient response:', JSON.stringify(data));
@@ -548,7 +673,7 @@ async function editClient(mac) {
 
             // Populate bootloader set dropdown
             try {
-                const blRes = await fetch(`${API_BASE}/bootloaders`);
+                const blRes = await authFetch(`${API_BASE}/bootloaders`);
                 const blData = await blRes.json();
                 const blSelect = document.getElementById('edit-bootloader-set-select');
                 blSelect.innerHTML = '<option value="">Default (global setting)</option>';
@@ -572,6 +697,7 @@ async function editClient(mac) {
             }).join('');
 
             showModal('edit-client-modal');
+            loadClientInventory(currentClient.mac_address);
         } else {
             showAlert(data.error || 'Failed to load client', 'error');
         }
@@ -581,11 +707,111 @@ async function editClient(mac) {
     }
 }
 
+async function loadClientInventory(mac) {
+    const container = document.getElementById('client-hardware-info');
+    const details = document.getElementById('client-hw-details');
+
+    try {
+        const res = await authFetch(`${API_BASE}/clients/inventory?mac=${encodeURIComponent(mac)}`);
+        const data = await res.json();
+
+        if (!data.success || !data.data) {
+            container.style.display = 'none';
+            return;
+        }
+
+        const inv = data.data;
+        container.style.display = 'block';
+
+        const fields = [
+            ['Manufacturer', inv.manufacturer],
+            ['Product', inv.product],
+            ['Serial', inv.serial],
+            ['UUID', inv.uuid],
+            ['CPU', inv.cpu],
+            ['Memory', inv.memory ? formatBytes(inv.memory) : ''],
+            ['Platform', inv.platform],
+            ['Architecture', inv.buildarch],
+            ['NIC', inv.nic_chip],
+            ['IP Address', inv.ip_address],
+            ['Last Seen', inv.created_at ? new Date(inv.created_at).toLocaleString() : ''],
+        ].filter(([, v]) => v);
+
+        if (fields.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+
+        details.innerHTML = `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 13px;">
+            ${fields.map(([label, value]) => `
+                <div style="color: var(--text-secondary);">${label}</div>
+                <div style="color: var(--text-primary); font-weight: 500;">${escapeHtml(String(value))}</div>
+            `).join('')}
+        </div>`;
+    } catch (err) {
+        container.style.display = 'none';
+    }
+}
+
+async function showInventoryHistory() {
+    if (!currentClient) return;
+
+    try {
+        const res = await authFetch(`${API_BASE}/clients/inventory/history?mac=${encodeURIComponent(currentClient.mac_address)}&limit=50`);
+        const data = await res.json();
+        const container = document.getElementById('inventory-history-table');
+
+        if (!data.success || !data.data || data.data.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-secondary); padding: 20px;">No inventory history.</p>';
+            openModal('inventory-history-modal');
+            return;
+        }
+
+        const html = `
+            <div class="table-scroll" style="max-height: 400px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>IP Address</th>
+                        <th>Manufacturer</th>
+                        <th>Product</th>
+                        <th>Serial</th>
+                        <th>CPU</th>
+                        <th>Memory</th>
+                        <th>Platform</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.data.map(inv => `
+                        <tr>
+                            <td>${new Date(inv.created_at).toLocaleString()}</td>
+                            <td>${escapeHtml(inv.ip_address || '-')}</td>
+                            <td>${escapeHtml(inv.manufacturer || '-')}</td>
+                            <td>${escapeHtml(inv.product || '-')}</td>
+                            <td>${escapeHtml(inv.serial || '-')}</td>
+                            <td>${escapeHtml(inv.cpu || '-')}</td>
+                            <td>${inv.memory ? formatBytes(inv.memory) : '-'}</td>
+                            <td>${escapeHtml(inv.platform || '-')}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+            </div>
+        `;
+
+        container.innerHTML = html;
+        openModal('inventory-history-modal');
+    } catch (err) {
+        showNotification('Failed to load inventory history', 'error');
+    }
+}
+
 async function deleteClient(mac) {
     if (!confirm(`Delete client ${mac}?`)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`, { method: 'DELETE' });
+        const res = await authFetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`, { method: 'DELETE' });
         const data = await res.json();
 
         if (data.success) {
@@ -600,12 +826,135 @@ async function deleteClient(mac) {
     }
 }
 
+async function wakeClient(mac) {
+    try {
+        const res = await authFetch(`${API_BASE}/clients/wake?mac=${encodeURIComponent(mac)}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Wake-on-LAN packet sent to ' + mac, 'success');
+        } else {
+            showNotification(data.error || 'Failed to send WOL packet', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to send WOL packet', 'error');
+    }
+}
+
+async function promoteClient(mac) {
+    try {
+        const res = await authFetch(`${API_BASE}/clients/promote?mac=${encodeURIComponent(mac)}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Client promoted to static', 'success');
+            loadClients();
+        } else {
+            showNotification(data.error || 'Failed to promote client', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to promote client', 'error');
+    }
+}
+
+async function showNextBoot(mac) {
+    const client = clients.find(c => c.mac_address === mac);
+    document.getElementById('next-boot-mac').value = mac + (client && client.name ? ' (' + client.name + ')' : '');
+    document.getElementById('next-boot-mac').dataset.mac = mac;
+
+    const select = document.getElementById('next-boot-image-select');
+    select.innerHTML = images.map(img =>
+        `<option value="${img.filename}">${img.name}</option>`
+    ).join('');
+
+    const currentDiv = document.getElementById('next-boot-current');
+    if (client && client.next_boot_image) {
+        const img = images.find(i => i.filename === client.next_boot_image);
+        document.getElementById('next-boot-current-image').textContent = img ? img.name : client.next_boot_image;
+        currentDiv.style.display = 'block';
+    } else {
+        currentDiv.style.display = 'none';
+    }
+
+    showModal('next-boot-modal');
+}
+
+async function saveNextBoot() {
+    const mac = document.getElementById('next-boot-mac').dataset.mac;
+    const imageFilename = document.getElementById('next-boot-image-select').value;
+    try {
+        const res = await authFetch(`${API_BASE}/clients/next-boot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac, image_filename: imageFilename })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Next boot action set', 'success');
+            closeModal('next-boot-modal');
+            loadClients();
+        } else {
+            showNotification(data.error || 'Failed to set next boot', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to set next boot', 'error');
+    }
+}
+
+async function saveNextBootAndWake() {
+    const mac = document.getElementById('next-boot-mac').dataset.mac;
+    const imageFilename = document.getElementById('next-boot-image-select').value;
+    try {
+        const res = await authFetch(`${API_BASE}/clients/next-boot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac, image_filename: imageFilename })
+        });
+        const data = await res.json();
+        if (data.success) {
+            // Now send WOL
+            const wolRes = await authFetch(`${API_BASE}/clients/wake?mac=${encodeURIComponent(mac)}`, { method: 'POST' });
+            const wolData = await wolRes.json();
+            if (wolData.success) {
+                showNotification('Next boot set & WOL packet sent', 'success');
+            } else {
+                showNotification('Next boot set but WOL failed: ' + (wolData.error || ''), 'warning');
+            }
+            closeModal('next-boot-modal');
+            loadClients();
+        } else {
+            showNotification(data.error || 'Failed to set next boot', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to set next boot', 'error');
+    }
+}
+
+async function clearNextBoot() {
+    const mac = document.getElementById('next-boot-mac').dataset.mac;
+    try {
+        const res = await authFetch(`${API_BASE}/clients/next-boot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mac_address: mac, image_filename: '' })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Next boot action cleared', 'success');
+            closeModal('next-boot-modal');
+            loadClients();
+        } else {
+            showNotification(data.error || 'Failed to clear next boot', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to clear next boot', 'error');
+    }
+}
+
 // Images
 async function loadImages() {
     try {
         const [imagesRes, filesRes] = await Promise.all([
-            fetch(`${API_BASE}/images`),
-            fetch(`${API_BASE}/files`)
+            authFetch(`${API_BASE}/images`),
+            authFetch(`${API_BASE}/files`)
         ]);
 
         const imagesData = await imagesRes.json();
@@ -720,7 +1069,6 @@ function renderImagesTable() {
                     <th onclick="sortImages('visibility')" style="cursor: pointer;">Visibility ${sortIcon('visibility')}</th>
                     <th onclick="sortImages('boot_method')" style="cursor: pointer;">Boot Method ${sortIcon('boot_method')}</th>
                     <th onclick="sortImages('distro')" style="cursor: pointer;">Distro ${sortIcon('distro')}</th>
-                    <th onclick="sortImages('boot_count')" style="cursor: pointer;">Boot Count ${sortIcon('boot_count')}</th>
                     <th>Operations</th>
                     <th>Actions</th>
                 </tr>
@@ -747,19 +1095,19 @@ function renderImagesTable() {
                                 ${img.public ? 'Public' : 'Private'}
                             </span>
                         </td>
-                        <td>
+                        <td style="white-space: nowrap;">
                             ${img.boot_method === 'kernel' ?
-                                '<span class="badge badge-success">Kernel/Initrd</span>' :
+                                '<span class="badge badge-success">Kernel</span>' :
                                 img.boot_method === 'nbd' ?
-                                '<span class="badge badge-warning">NBD Mount</span>' :
-                                '<span class="badge badge-info">SAN Boot</span>'
+                                '<span class="badge badge-warning">NBD</span>' :
+                                '<span class="badge badge-info">SAN</span>'
                             }
                             ${!img.sanboot_compatible && img.sanboot_hint && img.boot_method === 'sanboot' && !img.extracted ?
-                                '<br><span style="color: #ff9800; font-size: 0.85em; margin-top: 4px; display: block;">⚠ '+img.sanboot_hint+'</span>' :
+                                ' <span title="'+escapeHtml(img.sanboot_hint)+'" style="color: #ff9800; cursor: help;">⚠</span>' :
                                 ''
                             }
                             ${img.extracted && img.boot_method === 'sanboot' ?
-                                '<br><button class="btn btn-sm" style="margin-top: 4px;" onclick="setBootMethod(\''+img.filename+'\', \'kernel\')">Switch to Kernel</button>' :
+                                ' <button class="btn btn-sm" onclick="setBootMethod(\''+img.filename+'\', \'kernel\')">→ Kernel</button>' :
                                 ''
                             }
                         </td>
@@ -769,7 +1117,6 @@ function renderImagesTable() {
                                 (img.extraction_error ? '<span class="badge badge-danger" title="'+img.extraction_error+'">Error</span>' : '')
                             }
                         </td>
-                        <td>${img.boot_count || 0}</td>
                         <td class="operations-cell">
                             ${extractionProgress[img.filename] ? `
                                 <div class="progress-container">
@@ -813,7 +1160,7 @@ function renderImagesTable() {
 
 async function toggleImage(filename, currentState) {
     try {
-        const res = await fetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
+        const res = await authFetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: !currentState })
@@ -831,7 +1178,7 @@ async function toggleImage(filename, currentState) {
 
 async function togglePublic(filename, currentState) {
     try {
-        const res = await fetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
+        const res = await authFetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ public: !currentState })
@@ -850,7 +1197,7 @@ async function deleteImage(filename, name) {
     if (!confirm(`Delete image ${name}?\n\nWARNING: This will permanently delete the ISO file from disk and remove it from the database.`)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}&delete_file=true`, { method: 'DELETE' });
+        const res = await authFetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}&delete_file=true`, { method: 'DELETE' });
         const data = await res.json();
 
         if (data.success) {
@@ -867,7 +1214,7 @@ async function deleteImage(filename, name) {
 
 async function scanImages() {
     try {
-        const res = await fetch(`${API_BASE}/scan`, { method: 'POST' });
+        const res = await authFetch(`${API_BASE}/scan`, { method: 'POST' });
         const data = await res.json();
 
         if (data.success) {
@@ -905,7 +1252,7 @@ async function extractImage(filename, name) {
             }
         }, 500);
 
-        const res = await fetch(`${API_BASE}/images/extract?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
+        const res = await authFetch(`${API_BASE}/images/extract?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
         const data = await res.json();
 
         clearInterval(progressInterval);
@@ -953,7 +1300,7 @@ async function downloadNetboot(filename, name) {
             }
         }, 500);
 
-        const res = await fetch(`${API_BASE}/images/netboot/download?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
+        const res = await authFetch(`${API_BASE}/images/netboot/download?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
         const data = await res.json();
 
         clearInterval(progressInterval);
@@ -980,7 +1327,7 @@ async function downloadNetboot(filename, name) {
 
 async function setBootMethod(filename, method) {
     try {
-        const res = await fetch(`${API_BASE}/images/boot-method`, {
+        const res = await authFetch(`${API_BASE}/images/boot-method`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1015,7 +1362,7 @@ async function cycleBootMethod(filename, currentMethod) {
 // Boot Logs
 async function loadLogs() {
     try {
-        const res = await fetch(`${API_BASE}/logs?limit=50`);
+        const res = await authFetch(`${API_BASE}/logs?limit=50`);
         const data = await res.json();
 
         if (data.success) {
@@ -1084,7 +1431,7 @@ function setupForms() {
         };
 
         try {
-            const res = await fetch(`${API_BASE}/clients`, {
+            const res = await authFetch(`${API_BASE}/clients`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(client)
@@ -1120,7 +1467,7 @@ function setupForms() {
 
         try {
             // Update client
-            const res1 = await fetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`, {
+            const res1 = await authFetch(`${API_BASE}/clients?mac=${encodeURIComponent(mac)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updates)
@@ -1130,7 +1477,7 @@ function setupForms() {
             const selectedFilenames = Array.from(document.getElementById('edit-images-select').selectedOptions)
                 .map(opt => opt.value);
 
-            const res2 = await fetch(`${API_BASE}/assign-images`, {
+            const res2 = await authFetch(`${API_BASE}/assign-images`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1155,12 +1502,13 @@ function setupForms() {
     });
 
     document.getElementById('theme-form').addEventListener('submit', saveTheme);
+    document.getElementById('add-custom-tool-form').addEventListener('submit', createCustomTool);
 }
 
 // Theme
 async function loadTheme() {
     try {
-        const res = await fetch(`${API_BASE}/theme`);
+        const res = await authFetch(`${API_BASE}/theme`);
         const data = await res.json();
         if (data.success) {
             document.getElementById('theme-title').value = data.data.title || '';
@@ -1178,7 +1526,7 @@ async function saveTheme(e) {
         menu_timeout: parseInt(document.getElementById('theme-timeout').value) || 0,
     };
     try {
-        const res = await fetch(`${API_BASE}/theme`, {
+        const res = await authFetch(`${API_BASE}/theme`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(theme),
@@ -1197,7 +1545,7 @@ async function saveTheme(e) {
 // Tools
 async function loadTools() {
     try {
-        const res = await fetch(`${API_BASE}/tools`);
+        const res = await authFetch(`${API_BASE}/tools`);
         const data = await res.json();
         const container = document.getElementById('tools-list');
 
@@ -1224,6 +1572,7 @@ async function loadTools() {
             html += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">`;
             html += `<strong style="font-size: 16px;">${escapeHtml(tool.display_name)}</strong>`;
             html += `<span style="color: var(--text-muted); font-size: 13px;">v${escapeHtml(tool.version)}</span>`;
+            if (tool.custom) html += `<span class="badge badge-warning">Custom</span>`;
             if (tool.enabled) html += `<span class="badge badge-success">Enabled</span>`;
             if (tool.downloaded) html += `<span class="badge badge-info">Downloaded</span>`;
             html += `</div>`;
@@ -1247,6 +1596,9 @@ async function loadTools() {
                 }
                 html += `<button class="btn btn-danger" onclick="deleteTool('${tool.name}')">Delete Files</button>`;
             }
+            if (tool.custom) {
+                html += `<button class="btn btn-danger" onclick="deleteCustomTool('${tool.name}')">Remove</button>`;
+            }
             html += `</div></div>`;
 
             // Download URL row
@@ -1268,7 +1620,7 @@ async function loadTools() {
 
 async function downloadTool(name) {
     try {
-        const res = await fetch(`${API_BASE}/tools/download?name=${encodeURIComponent(name)}`, { method: 'POST' });
+        const res = await authFetch(`${API_BASE}/tools/download?name=${encodeURIComponent(name)}`, { method: 'POST' });
         const data = await res.json();
         if (!data.success) {
             showNotification(data.error || 'Download failed', 'error');
@@ -1284,7 +1636,7 @@ async function downloadTool(name) {
         // Poll progress
         const poll = setInterval(async () => {
             try {
-                const r = await fetch(`${API_BASE}/tools/progress?name=${encodeURIComponent(name)}`);
+                const r = await authFetch(`${API_BASE}/tools/progress?name=${encodeURIComponent(name)}`);
                 const d = await r.json();
                 if (!d.success) return;
 
@@ -1319,7 +1671,7 @@ async function downloadTool(name) {
 
 async function toggleTool(name, enabled) {
     try {
-        const res = await fetch(`${API_BASE}/tools/toggle`, {
+        const res = await authFetch(`${API_BASE}/tools/toggle`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, enabled })
@@ -1339,7 +1691,7 @@ async function toggleTool(name, enabled) {
 async function deleteTool(name) {
     if (!confirm(`Delete downloaded files for ${name}? You can re-download later.`)) return;
     try {
-        const res = await fetch(`${API_BASE}/tools/delete?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const res = await authFetch(`${API_BASE}/tools/delete?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.success) {
             showNotification('Tool files deleted', 'success');
@@ -1352,6 +1704,63 @@ async function deleteTool(name) {
     }
 }
 
+async function createCustomTool(e) {
+    e.preventDefault();
+    const form = e.target;
+    const data = {
+        name: form.name.value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+        display_name: form.display_name.value.trim(),
+        description: form.description.value.trim(),
+        download_url: form.download_url.value.trim(),
+        boot_method: form.boot_method.value,
+        archive_type: form.archive_type.value,
+        kernel_path: form.kernel_path.value.trim(),
+        initrd_path: form.initrd_path.value.trim(),
+        boot_params: form.boot_params.value.trim(),
+        version: form.version.value.trim()
+    };
+
+    if (!data.name || !data.display_name || !data.download_url) {
+        showNotification('Name, display name, and download URL are required', 'error');
+        return;
+    }
+
+    try {
+        const res = await authFetch(`${API_BASE}/tools/custom`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        if (result.success) {
+            showNotification('Custom tool created', 'success');
+            closeModal('add-custom-tool-modal');
+            form.reset();
+            loadTools();
+        } else {
+            showNotification(result.error || 'Failed to create tool', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to create tool', 'error');
+    }
+}
+
+async function deleteCustomTool(name) {
+    if (!confirm(`Delete custom tool "${name}"? This removes the tool and all its files.`)) return;
+    try {
+        const res = await authFetch(`${API_BASE}/tools/custom/delete?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('Custom tool removed', 'success');
+            loadTools();
+        } else {
+            showNotification(data.error || 'Failed to delete tool', 'error');
+        }
+    } catch (err) {
+        showNotification('Failed to delete tool', 'error');
+    }
+}
+
 async function updateToolURL(name, inputId) {
     const url = document.getElementById(inputId).value.trim();
     if (!url) {
@@ -1359,7 +1768,7 @@ async function updateToolURL(name, inputId) {
         return;
     }
     try {
-        const res = await fetch(`${API_BASE}/tools/url`, {
+        const res = await authFetch(`${API_BASE}/tools/url`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, url })
@@ -1378,7 +1787,7 @@ async function updateToolURL(name, inputId) {
 // Bootloaders
 async function loadBootloaders() {
     try {
-        const res = await fetch(`${API_BASE}/bootloaders`);
+        const res = await authFetch(`${API_BASE}/bootloaders`);
         const data = await res.json();
         const container = document.getElementById('bootloaders-table');
 
@@ -1455,7 +1864,7 @@ async function loadBootloaders() {
 
 async function selectBootloaderSet(setName) {
     try {
-        const res = await fetch(`${API_BASE}/bootloaders/select`, {
+        const res = await authFetch(`${API_BASE}/bootloaders/select`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ set: setName })
@@ -1484,7 +1893,7 @@ async function createBootloaderSet(event) {
     if (!setName) return;
 
     try {
-        const res = await fetch(`${API_BASE}/bootloaders/create`, {
+        const res = await authFetch(`${API_BASE}/bootloaders/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: setName })
@@ -1522,7 +1931,7 @@ async function uploadBootloaderFiles(event) {
     }
 
     try {
-        const res = await fetch(`${API_BASE}/bootloaders/upload`, { method: 'POST', body: formData });
+        const res = await authFetch(`${API_BASE}/bootloaders/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success) {
             showNotification(data.message || 'Files uploaded', 'success');
@@ -1540,7 +1949,7 @@ async function deleteBootloaderSet(setName) {
     if (!confirm(`Delete the entire "${setName}" bootloader set and all its files?`)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}`, { method: 'DELETE' });
+        const res = await authFetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.success) {
             showNotification(`Set "${setName}" deleted`, 'success');
@@ -1557,7 +1966,7 @@ async function deleteBootloaderFile(setName, fileName) {
     if (!confirm(`Delete "${fileName}" from set "${setName}"?`)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}&name=${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+        const res = await authFetch(`${API_BASE}/bootloaders/delete?set=${encodeURIComponent(setName)}&name=${encodeURIComponent(fileName)}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.success) {
             showNotification(`Deleted ${fileName}`, 'success');
@@ -1573,7 +1982,7 @@ async function deleteBootloaderFile(setName, fileName) {
 // USB Images
 async function loadUSBImages() {
     try {
-        const res = await fetch(`${API_BASE}/usb`);
+        const res = await authFetch(`${API_BASE}/usb`);
         const data = await res.json();
         const container = document.getElementById('usb-images-content');
 
@@ -1790,7 +2199,7 @@ let logsRefreshInterval = null;
 let autoScrollEnabled = true;
 
 function loadServerLogs() {
-    fetch('/api/logs/buffer')
+    authFetch('/api/logs/buffer')
         .then(response => response.json())
         .then(data => {
             if (data.success && data.logs) {
@@ -1881,7 +2290,7 @@ function clearLiveLogs() {
 // ==================== User Management ====================
 
 function loadUsers() {
-    fetch('/api/users')
+    authFetch('/api/users')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -1973,7 +2382,7 @@ function deleteUser(username) {
         return;
     }
 
-    fetch(`/api/users?username=${encodeURIComponent(username)}`, {
+    authFetch(`/api/users?username=${encodeURIComponent(username)}`, {
         method: 'DELETE'
     })
     .then(response => response.json())
@@ -2002,7 +2411,7 @@ document.getElementById('add-user-form').addEventListener('submit', function(e) 
         enabled: formData.get('enabled') === 'on'
     };
 
-    fetch('/api/users', {
+    authFetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData)
@@ -2032,7 +2441,7 @@ document.getElementById('edit-user-form').addEventListener('submit', function(e)
         enabled: formData.get('enabled') === 'on'
     };
 
-    fetch('/api/users', {
+    authFetch('/api/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData)
@@ -2061,7 +2470,7 @@ document.getElementById('reset-password-form').addEventListener('submit', functi
         new_password: formData.get('password')
     };
 
-    fetch('/api/users/reset-password', {
+    authFetch('/api/users/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resetData)
@@ -2093,7 +2502,7 @@ document.getElementById('add-group-form').addEventListener('submit', async funct
     };
 
     try {
-        const res = await fetch(`${API_BASE}/groups`, {
+        const res = await authFetch(`${API_BASE}/groups`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(groupData)
@@ -2127,7 +2536,7 @@ document.getElementById('edit-group-form').addEventListener('submit', async func
     };
 
     try {
-        const res = await fetch(`${API_BASE}/groups/update?id=${groupData.id}`, {
+        const res = await authFetch(`${API_BASE}/groups/update?id=${groupData.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(groupData)
@@ -2176,7 +2585,7 @@ document.getElementById('download-form').addEventListener('submit', function(e) 
     document.getElementById('download-submit-btn').disabled = true;
     document.getElementById('download-progress-container').style.display = 'block';
 
-    fetch('/api/images/download', {
+    authFetch('/api/images/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(downloadData)
@@ -2205,7 +2614,7 @@ document.getElementById('download-form').addEventListener('submit', function(e) 
 });
 
 function checkDownloadProgress(filename) {
-    fetch('/api/downloads/progress?filename=' + encodeURIComponent(filename))
+    authFetch('/api/downloads/progress?filename=' + encodeURIComponent(filename))
         .then(response => response.json())
         .then(data => {
             if (data.success && data.data) {
@@ -2242,7 +2651,7 @@ async function showAutoInstallModal(filename, name) {
 
     // Load current auto-install configuration
     try {
-        const res = await fetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`);
+        const res = await authFetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`);
         const data = await res.json();
 
         if (data.success && data.data) {
@@ -2272,7 +2681,7 @@ async function saveAutoInstallScript() {
     const script = document.getElementById('autoinstall-script').value;
 
     try {
-        const res = await fetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`, {
+        const res = await authFetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2310,7 +2719,7 @@ async function loadPublicFiles() {
     container.innerHTML = '<div class="spinner"></div><p>Loading files...</p>';
 
     try {
-        const res = await fetch('/api/files');
+        const res = await authFetch('/api/files');
         const data = await res.json();
 
         if (data.success) {
@@ -2398,7 +2807,7 @@ async function uploadPublicFile(event) {
     formData.append('public', 'true');
 
     try {
-        const res = await fetch('/api/files/upload', {
+        const res = await authFetch('/api/files/upload', {
             method: 'POST',
             body: formData
         });
@@ -2507,7 +2916,7 @@ async function uploadImageFile(event) {
     formData.append('imageId', imageId);
 
     try {
-        const res = await fetch('/api/files/upload', {
+        const res = await authFetch('/api/files/upload', {
             method: 'POST',
             body: formData
         });
@@ -2544,7 +2953,7 @@ async function uploadImageFile(event) {
 
 async function showEditFileModal(fileId) {
     try {
-        const res = await fetch('/api/files');
+        const res = await authFetch('/api/files');
         const data = await res.json();
 
         if (!data.success) {
@@ -2583,7 +2992,7 @@ async function updateFile(event) {
     const description = document.getElementById('edit-file-description').value;
 
     try {
-        const res = await fetch(`/api/files/update?id=${fileId}`, {
+        const res = await authFetch(`/api/files/update?id=${fileId}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ description })
@@ -2611,7 +3020,7 @@ async function deleteFile(fileId, filename) {
     }
 
     try {
-        const res = await fetch(`/api/files/delete?id=${fileId}`, {
+        const res = await authFetch(`/api/files/delete?id=${fileId}`, {
             method: 'DELETE'
         });
 
@@ -2663,7 +3072,7 @@ let groups = [];
 
 async function loadGroups() {
     try {
-        const res = await fetch(`${API_BASE}/groups`);
+        const res = await authFetch(`${API_BASE}/groups`);
         const data = await res.json();
 
         if (data.success && data.data) {
@@ -2777,7 +3186,7 @@ async function deleteGroup(groupId, groupName) {
     if (!confirm(`Delete group "${groupName}"? This will unassign all images from this group.`)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/groups/delete?id=${groupId}`, {
+        const res = await authFetch(`${API_BASE}/groups/delete?id=${groupId}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: groupId })
@@ -2858,7 +3267,7 @@ async function loadImageFileBrowser(filename) {
     container.innerHTML = '<div class="loading"><div class="spinner"></div>Loading files...</div>';
 
     try {
-        const res = await fetch(`${API_BASE}/images/files?filename=${encodeURIComponent(filename)}`);
+        const res = await authFetch(`${API_BASE}/images/files?filename=${encodeURIComponent(filename)}`);
         const data = await res.json();
 
         if (data.success && data.data && data.data.files) {
@@ -2994,7 +3403,7 @@ async function deleteImageFile(filename, baseDir, path, isDir, isIso) {
     if (!confirm(confirmMsg)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/images/files/delete`, {
+        const res = await authFetch(`${API_BASE}/images/files/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3054,7 +3463,7 @@ async function saveImageProperties() {
 
     try {
         // Update general image properties
-        const res = await fetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
+        const res = await authFetch(`${API_BASE}/images?filename=${encodeURIComponent(filename)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updates)
@@ -3068,7 +3477,7 @@ async function saveImageProperties() {
         }
 
         // Update auto-install script
-        const autoInstallRes = await fetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`, {
+        const autoInstallRes = await authFetch(`${API_BASE}/images/autoinstall?filename=${encodeURIComponent(filename)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3109,7 +3518,7 @@ async function loadPropsImageFiles() {
         }
 
         // Fetch filesystem file list (returns {path, is_dir, size})
-        const res = await fetch(`${API_BASE}/images/files?filename=${encodeURIComponent(filename)}`);
+        const res = await authFetch(`${API_BASE}/images/files?filename=${encodeURIComponent(filename)}`);
         if (!res.ok) throw new Error('Failed to load files');
 
         const data = await res.json();
@@ -3290,7 +3699,7 @@ async function deleteFileByPath(filePath) {
     const baseDir = filename.replace(/\.[^/.]+$/, '');
 
     try {
-        const res = await fetch(`${API_BASE}/images/files/delete`, {
+        const res = await authFetch(`${API_BASE}/images/files/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3326,7 +3735,7 @@ async function deleteExtractedContents() {
     const baseDir = filename.replace(/\.[^/.]+$/, '');
 
     try {
-        const res = await fetch(`${API_BASE}/images/files/delete`, {
+        const res = await authFetch(`${API_BASE}/images/files/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3379,7 +3788,7 @@ async function uploadPropsImageFile() {
         formData.append('autoInstall', 'true');
         formData.append('public', 'false');
 
-        const uploadRes = await fetch(`${API_BASE}/files/upload`, {
+        const uploadRes = await authFetch(`${API_BASE}/files/upload`, {
             method: 'POST',
             body: formData
         });
@@ -3410,7 +3819,7 @@ async function deletePropsImageFile(imageId, fileId) {
     }
 
     try {
-        const res = await fetch(`${API_BASE}/images/${imageId}/files/${fileId}`, {
+        const res = await authFetch(`${API_BASE}/images/${imageId}/files/${fileId}`, {
             method: 'DELETE'
         });
 

@@ -76,6 +76,8 @@ type Client struct {
 	BootCount        int            `gorm:"default:0" json:"boot_count"`
 	Images           []Image        `gorm:"many2many:client_images;" json:"images,omitempty"`
 	AllowedImages    StringSlice    `gorm:"type:text" json:"allowed_images,omitempty"`
+	NextBootImage    string         `json:"next_boot_image,omitempty"`
+	Static           bool           `gorm:"default:false" json:"static"`
 }
 
 type SyncFile struct {
@@ -149,6 +151,24 @@ type BootLog struct {
 	IPAddress  string     `json:"ip_address,omitempty"`
 }
 
+type HardwareInventory struct {
+	ID           uint      `gorm:"primarykey" json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	ClientID     *uint     `gorm:"index" json:"client_id,omitempty"`
+	MACAddress   string    `gorm:"index;not null" json:"mac_address"`
+	IPAddress    string    `json:"ip_address,omitempty"`
+	Manufacturer string    `json:"manufacturer,omitempty"`
+	Product      string    `json:"product,omitempty"`
+	Serial       string    `json:"serial,omitempty"`
+	UUID         string    `json:"uuid,omitempty"`
+	CPU          string    `json:"cpu,omitempty"`
+	Memory       int64     `json:"memory,omitempty"`
+	Platform     string    `json:"platform,omitempty"`
+	BuildArch    string    `json:"buildarch,omitempty"`
+	Asset        string    `json:"asset,omitempty"`
+	NICChip      string    `json:"nic_chip,omitempty"`
+}
+
 type CustomFile struct {
 	ID              uint           `gorm:"primarykey" json:"id"`
 	CreatedAt       time.Time      `json:"created_at"`
@@ -205,4 +225,10 @@ type BootTool struct {
 	Downloaded  bool   `gorm:"default:false" json:"downloaded"`         // files are on disk
 	Order       int    `gorm:"default:0" json:"order"`                  // menu order
 	DownloadURL string `json:"download_url"`                            // user-overridable URL
+	Custom      bool   `gorm:"default:false" json:"custom"`             // user-created tool
+	KernelPath  string `json:"kernel_path,omitempty"`                   // path within tool dir
+	InitrdPath  string `json:"initrd_path,omitempty"`                   // path within tool dir
+	BootParams  string `json:"boot_params,omitempty"`                   // kernel parameters ({{HTTP_URL}} replaced)
+	BootMethod  string `json:"boot_method,omitempty"`                   // "kernel", "memdisk", or "chain"
+	ArchiveType string `json:"archive_type,omitempty"`                  // "zip", "bin", or "iso"
 }

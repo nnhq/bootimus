@@ -21,6 +21,7 @@ import (
 	"bootimus/internal/storage"
 	"bootimus/internal/sysstats"
 	"bootimus/internal/tools"
+	"bootimus/internal/wol"
 )
 
 // BootloaderSelector provides bootloader set management
@@ -38,9 +39,10 @@ type Handler struct {
 	version            string
 	bootloaderSelector BootloaderSelector
 	toolsManager       *tools.Manager
+	wolBroadcastAddr   string
 }
 
-func NewHandler(store storage.Storage, dataDir string, isoDir string, bootDir string, version string, blSelector BootloaderSelector, tm *tools.Manager) *Handler {
+func NewHandler(store storage.Storage, dataDir string, isoDir string, bootDir string, version string, blSelector BootloaderSelector, tm *tools.Manager, wolBroadcastAddr string) *Handler {
 	return &Handler{
 		storage:            store,
 		dataDir:            dataDir,
@@ -49,6 +51,7 @@ func NewHandler(store storage.Storage, dataDir string, isoDir string, bootDir st
 		version:            version,
 		bootloaderSelector: blSelector,
 		toolsManager:       tm,
+		wolBroadcastAddr:   wolBroadcastAddr,
 	}
 }
 
@@ -163,6 +166,7 @@ func (h *Handler) CreateClient(w http.ResponseWriter, r *http.Request) {
 	client.MACAddress = strings.ToLower(strings.ReplaceAll(client.MACAddress, "-", ":"))
 
 	client.Enabled = true
+	client.Static = true
 
 	if err := h.storage.CreateClient(&client); err != nil {
 		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
@@ -231,6 +235,162 @@ func (h *Handler) DeleteClient(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Admin: Client deleted - MAC: %s", mac)
 	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Client deleted"})
+}
+
+func (h *Handler) WakeClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	mac := r.URL.Query().Get("mac")
+	if mac == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac parameter"})
+		return
+	}
+
+	// Validate client exists
+	if _, err := h.storage.GetClient(mac); err != nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Client not found"})
+		return
+	}
+
+	broadcastAddr := h.wolBroadcastAddr
+	// Allow per-request override
+	var req struct {
+		BroadcastAddr string `json:"broadcast_addr"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.BroadcastAddr != "" {
+			broadcastAddr = req.BroadcastAddr
+		}
+	}
+
+	if err := wol.SendMagicPacket(mac, broadcastAddr); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: fmt.Sprintf("Failed to send WOL packet: %v", err)})
+		return
+	}
+
+	log.Printf("Admin: Wake-on-LAN sent to %s (broadcast: %s)", mac, broadcastAddr)
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("Wake-on-LAN packet sent to %s", mac)})
+}
+
+func (h *Handler) SetNextBootImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		MACAddress    string `json:"mac_address"`
+		ImageFilename string `json:"image_filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"})
+		return
+	}
+
+	if req.MACAddress == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac_address"})
+		return
+	}
+
+	// Clear next boot image if no image specified
+	if req.ImageFilename == "" {
+		if err := h.storage.ClearNextBootImage(req.MACAddress); err != nil {
+			h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+			return
+		}
+		log.Printf("Admin: Cleared next boot image for %s", req.MACAddress)
+		h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Next boot action cleared"})
+		return
+	}
+
+	if err := h.storage.SetNextBootImage(req.MACAddress, req.ImageFilename); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	log.Printf("Admin: Set next boot image for %s to %s", req.MACAddress, req.ImageFilename)
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: fmt.Sprintf("Next boot set to %s", req.ImageFilename)})
+}
+
+func (h *Handler) PromoteClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	mac := r.URL.Query().Get("mac")
+	if mac == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac parameter"})
+		return
+	}
+
+	client, err := h.storage.GetClient(mac)
+	if err != nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Client not found"})
+		return
+	}
+
+	client.Static = true
+	if err := h.storage.UpdateClient(mac, client); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	log.Printf("Admin: Client promoted to static - MAC: %s", mac)
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Client promoted to static"})
+}
+
+func (h *Handler) GetClientInventory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	mac := r.URL.Query().Get("mac")
+	if mac == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac parameter"})
+		return
+	}
+
+	inv, err := h.storage.GetLatestHardwareInventory(mac)
+	if err != nil {
+		h.sendJSON(w, http.StatusOK, Response{Success: true, Data: nil})
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: inv})
+}
+
+func (h *Handler) GetClientInventoryHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	mac := r.URL.Query().Get("mac")
+	if mac == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Missing mac parameter"})
+		return
+	}
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	history, err := h.storage.GetHardwareInventoryHistory(mac, limit)
+	if err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: history})
 }
 
 func (h *Handler) syncFilesystemToDatabase() {
@@ -1335,23 +1495,17 @@ func (h *Handler) ListTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enrich with definition info and actual download status
-	type toolResponse struct {
-		*models.BootTool
-		DownloadURL string `json:"download_url"`
-	}
-	var result []toolResponse
+	// Enrich with actual download status
 	for _, t := range toolsList {
-		tr := toolResponse{BootTool: t}
-		def := tools.GetDefinition(t.Name)
-		if def != nil {
-			tr.DownloadURL = def.DownloadURL
+		t.Downloaded = h.toolsManager.IsDownloaded(t.Name)
+		if t.DownloadURL == "" {
+			if def := tools.GetDefinition(t.Name); def != nil {
+				t.DownloadURL = def.DownloadURL
+			}
 		}
-		tr.Downloaded = h.toolsManager.IsDownloaded(t.Name)
-		result = append(result, tr)
 	}
 
-	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: result})
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Data: toolsList})
 }
 
 func (h *Handler) ToggleTool(w http.ResponseWriter, r *http.Request) {
@@ -1471,6 +1625,102 @@ func (h *Handler) UpdateToolURL(w http.ResponseWriter, r *http.Request) {
 	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Download URL updated"})
 }
 
+func (h *Handler) CreateCustomTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+		Description string `json:"description"`
+		Version     string `json:"version"`
+		DownloadURL string `json:"download_url"`
+		KernelPath  string `json:"kernel_path"`
+		InitrdPath  string `json:"initrd_path"`
+		BootParams  string `json:"boot_params"`
+		BootMethod  string `json:"boot_method"`
+		ArchiveType string `json:"archive_type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Invalid request body"})
+		return
+	}
+
+	if req.Name == "" || req.DisplayName == "" || req.DownloadURL == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Name, display name, and download URL are required"})
+		return
+	}
+
+	if req.BootMethod == "" {
+		req.BootMethod = "kernel"
+	}
+	if req.ArchiveType == "" {
+		req.ArchiveType = "bin"
+	}
+
+	tool := &models.BootTool{
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		Description: req.Description,
+		Version:     req.Version,
+		DownloadURL: req.DownloadURL,
+		KernelPath:  req.KernelPath,
+		InitrdPath:  req.InitrdPath,
+		BootParams:  req.BootParams,
+		BootMethod:  req.BootMethod,
+		ArchiveType: req.ArchiveType,
+		Custom:      true,
+		Enabled:     false,
+		Downloaded:  false,
+	}
+
+	if err := h.storage.SaveBootTool(tool); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	log.Printf("Admin: Custom tool created - %s (%s)", req.DisplayName, req.Name)
+	h.sendJSON(w, http.StatusCreated, Response{Success: true, Message: "Custom tool created", Data: tool})
+}
+
+func (h *Handler) DeleteCustomTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Tool name required"})
+		return
+	}
+
+	tool, err := h.storage.GetBootTool(name)
+	if err != nil {
+		h.sendJSON(w, http.StatusNotFound, Response{Success: false, Error: "Tool not found"})
+		return
+	}
+
+	if !tool.Custom {
+		h.sendJSON(w, http.StatusBadRequest, Response{Success: false, Error: "Cannot delete built-in tools"})
+		return
+	}
+
+	// Delete files
+	h.toolsManager.Delete(name)
+
+	// Delete from database
+	if err := h.storage.DeleteBootTool(name); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	log.Printf("Admin: Custom tool deleted - %s", name)
+	h.sendJSON(w, http.StatusOK, Response{Success: true, Message: "Custom tool deleted"})
+}
+
 func (h *Handler) ToolProgress(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	if name == "" {
@@ -1510,6 +1760,12 @@ func (h *Handler) GetServerInfo(w http.ResponseWriter, r *http.Request) {
 				}
 				return "Native"
 			}(),
+			"ldap_enabled": func() string {
+				if os.Getenv("BOOTIMUS_LDAP_HOST") != "" {
+					return os.Getenv("BOOTIMUS_LDAP_HOST")
+				}
+				return "Disabled"
+			}(),
 		},
 		"environment": map[string]string{
 			"BOOTIMUS_TFTP_PORT":        os.Getenv("BOOTIMUS_TFTP_PORT"),
@@ -1524,6 +1780,8 @@ func (h *Handler) GetServerInfo(w http.ResponseWriter, r *http.Request) {
 			"BOOTIMUS_DB_SSLMODE":       os.Getenv("BOOTIMUS_DB_SSLMODE"),
 			"BOOTIMUS_DB_DISABLE":       os.Getenv("BOOTIMUS_DB_DISABLE"),
 			"BOOTIMUS_SERVER_ADDR":      os.Getenv("BOOTIMUS_SERVER_ADDR"),
+			"BOOTIMUS_LDAP_HOST":        os.Getenv("BOOTIMUS_LDAP_HOST"),
+			"BOOTIMUS_LDAP_BASE_DN":     os.Getenv("BOOTIMUS_LDAP_BASE_DN"),
 		},
 		"system_stats": sysStats,
 	}

@@ -344,10 +344,10 @@ func (e *Extractor) detectUbuntuDebian(img *iso9660.Image) (*BootFiles, error) {
 		{"/install.amd/vmlinuz", "/install.amd/initrd.gz", "ubuntu-installer", ""},
 		{"/install/vmlinuz", "/install/initrd.gz", "debian", ""},
 		{"/install.amd/vmlinuz", "/install.amd/initrd.gz", "debian", ""},
-		{"/live/vmlinuz", "/live/initrd.img", "debian", "boot=live fetch= "},
-		{"/live/vmlinuz1", "/live/initrd1.img", "debian", "boot=live fetch= "},
-		{"/live/vmlinuz-*", "/live/initrd.img-*", "debian", "boot=live fetch= "},
-		{"/vmlinuz", "/initrd.img", "debian", "boot=live fetch= "},
+		{"/live/vmlinuz", "/live/initrd.img", "debian", "boot=live "},
+		{"/live/vmlinuz1", "/live/initrd1.img", "debian", "boot=live "},
+		{"/live/vmlinuz-*", "/live/initrd.img-*", "debian", "boot=live "},
+		{"/vmlinuz", "/initrd.img", "debian", "boot=live "},
 		{"/boot/linux26", "/boot/initrd.img", "debian", ""},
 	}
 
@@ -355,7 +355,7 @@ func (e *Extractor) detectUbuntuDebian(img *iso9660.Image) (*BootFiles, error) {
 		if strings.Contains(p.kernel, "*") {
 			if found := findKernelInitrd(img, "/live", "vmlinuz", "initrd.img"); found != nil {
 				found.Distro = "debian"
-				found.BootParams = "boot=live fetch= "
+				found.BootParams = "boot=live "
 				return found, nil
 			}
 		} else if fileExists(img, p.kernel) && fileExists(img, p.initrd) {
@@ -469,12 +469,13 @@ func findKernelInitrd(img *iso9660.Image, dir, kernelPrefix, initrdPrefix string
 			squashfs = filepath.Join(dir, name)
 			log.Printf("Found squashfs: %s", squashfs)
 		}
-		if kernel != "" && initrd != "" {
-			return &BootFiles{
-				Kernel:       kernel,
-				Initrd:       initrd,
-				SquashfsPath: squashfs,
-			}
+	}
+
+	if kernel != "" && initrd != "" {
+		return &BootFiles{
+			Kernel:       kernel,
+			Initrd:       initrd,
+			SquashfsPath: squashfs,
 		}
 	}
 

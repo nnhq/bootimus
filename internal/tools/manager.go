@@ -199,18 +199,26 @@ func (m *Manager) EnsureToolRecords() error {
 
 // IsDownloaded checks if a tool's files exist on disk
 func (m *Manager) IsDownloaded(name string) bool {
-	def := GetDefinition(name)
-	if def == nil {
+	var kernelPath, initrdPath string
+
+	if def := GetDefinition(name); def != nil {
+		kernelPath = def.KernelPath
+		initrdPath = def.InitrdPath
+	} else if tool, err := m.store.GetBootTool(name); err == nil && tool.Custom {
+		kernelPath = tool.KernelPath
+		initrdPath = tool.InitrdPath
+	} else {
 		return false
 	}
-	kernelPath := filepath.Join(m.ToolDir(name), def.KernelPath)
-	if _, err := os.Stat(kernelPath); err != nil {
+
+	if kernelPath == "" {
 		return false
 	}
-	// Only check initrd if the tool has one
-	if def.InitrdPath != "" {
-		initrdPath := filepath.Join(m.ToolDir(name), def.InitrdPath)
-		if _, err := os.Stat(initrdPath); err != nil {
+	if _, err := os.Stat(filepath.Join(m.ToolDir(name), kernelPath)); err != nil {
+		return false
+	}
+	if initrdPath != "" {
+		if _, err := os.Stat(filepath.Join(m.ToolDir(name), initrdPath)); err != nil {
 			return false
 		}
 	}
@@ -219,19 +227,33 @@ func (m *Manager) IsDownloaded(name string) bool {
 
 // Download downloads and extracts a tool's files. Uses the URL from the DB record.
 func (m *Manager) Download(name string, progressCh chan<- string) error {
-	def := GetDefinition(name)
-	if def == nil {
-		return fmt.Errorf("unknown tool: %s", name)
-	}
-
-	// Get download URL from DB (user may have overridden it)
 	tool, err := m.store.GetBootTool(name)
 	if err != nil {
 		return fmt.Errorf("tool not found in database: %w", err)
 	}
-	downloadURL := tool.DownloadURL
+
+	// Build effective definition from built-in or custom tool DB fields
+	var displayName, downloadURL, kernelPath, archiveType string
+
+	if def := GetDefinition(name); def != nil {
+		displayName = def.DisplayName
+		downloadURL = tool.DownloadURL
+		if downloadURL == "" {
+			downloadURL = def.DownloadURL
+		}
+		kernelPath = def.KernelPath
+		archiveType = def.ArchiveType
+	} else if tool.Custom {
+		displayName = tool.DisplayName
+		downloadURL = tool.DownloadURL
+		kernelPath = tool.KernelPath
+		archiveType = tool.ArchiveType
+	} else {
+		return fmt.Errorf("unknown tool: %s", name)
+	}
+
 	if downloadURL == "" {
-		downloadURL = def.DownloadURL
+		return fmt.Errorf("no download URL configured for %s", name)
 	}
 
 	toolDir := m.ToolDir(name)
@@ -239,7 +261,7 @@ func (m *Manager) Download(name string, progressCh chan<- string) error {
 		return fmt.Errorf("failed to create tool directory: %w", err)
 	}
 
-	log.Printf("Tools: Downloading %s from %s", def.DisplayName, downloadURL)
+	log.Printf("Tools: Downloading %s from %s", displayName, downloadURL)
 
 	tmpFile, err := os.CreateTemp("", "bootimus-tool-*.zip")
 	if err != nil {
@@ -293,11 +315,10 @@ func (m *Manager) Download(name string, progressCh chan<- string) error {
 		return fmt.Errorf("download write failed: %w", err)
 	}
 
-	log.Printf("Tools: Downloaded %s (%d bytes)", def.DisplayName, written)
+	log.Printf("Tools: Downloaded %s (%d bytes)", displayName, written)
 	m.setProgress(name, &DownloadProgress{Status: "extracting", Percent: 100, Downloaded: written, Total: totalSize})
 
 	// Handle different archive types
-	archiveType := def.ArchiveType
 	if archiveType == "" {
 		archiveType = "zip"
 	}
@@ -310,7 +331,7 @@ func (m *Manager) Download(name string, progressCh chan<- string) error {
 		}
 	case "bin":
 		// Single binary - move to tool dir with the expected filename
-		destName := def.KernelPath
+		destName := kernelPath
 		if destName == "" {
 			destName = filepath.Base(downloadURL)
 		}
@@ -341,12 +362,11 @@ func (m *Manager) Download(name string, progressCh chan<- string) error {
 		return err
 	}
 	tool.Downloaded = true
-	tool.Version = def.Version
 	if err := m.store.SaveBootTool(tool); err != nil {
 		return err
 	}
 
-	log.Printf("Tools: %s ready at %s", def.DisplayName, toolDir)
+	log.Printf("Tools: %s ready at %s", displayName, toolDir)
 	m.setProgress(name, &DownloadProgress{Status: "done", Percent: 100, Downloaded: written, Total: totalSize})
 
 	return nil
@@ -380,24 +400,40 @@ func (m *Manager) GetEnabledTools(serverURL string) []EnabledTool {
 		if !tool.Enabled || !tool.Downloaded {
 			continue
 		}
-		def := GetDefinition(tool.Name)
-		if def == nil {
+
+		var kp, ip, bp, bm string
+
+		if def := GetDefinition(tool.Name); def != nil {
+			kp = def.KernelPath
+			ip = def.InitrdPath
+			bp = def.BootParams
+			bm = def.BootMethod
+		} else if tool.Custom {
+			kp = tool.KernelPath
+			ip = tool.InitrdPath
+			bp = tool.BootParams
+			bm = tool.BootMethod
+		} else {
 			continue
 		}
-		params := strings.ReplaceAll(def.BootParams, "{{HTTP_URL}}", serverURL)
-		bootMethod := def.BootMethod
-		if bootMethod == "" {
-			bootMethod = "kernel"
+
+		if kp == "" {
+			continue
+		}
+
+		params := strings.ReplaceAll(bp, "{{HTTP_URL}}", serverURL)
+		if bm == "" {
+			bm = "kernel"
 		}
 		et := EnabledTool{
 			Name:        tool.Name,
 			DisplayName: tool.DisplayName,
-			KernelURL:   fmt.Sprintf("%s/tools/%s/%s", serverURL, tool.Name, def.KernelPath),
+			KernelURL:   fmt.Sprintf("%s/tools/%s/%s", serverURL, tool.Name, kp),
 			BootParams:  params,
-			BootMethod:  bootMethod,
+			BootMethod:  bm,
 		}
-		if def.InitrdPath != "" {
-			et.InitrdURL = fmt.Sprintf("%s/tools/%s/%s", serverURL, tool.Name, def.InitrdPath)
+		if ip != "" {
+			et.InitrdURL = fmt.Sprintf("%s/tools/%s/%s", serverURL, tool.Name, ip)
 		}
 		result = append(result, et)
 	}

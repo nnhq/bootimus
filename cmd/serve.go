@@ -147,7 +147,24 @@ func runServe(cmd *cobra.Command, args []string) {
 		log.Println("\nContinuing to start server...")
 	}
 
-	authMgr, err := auth.NewManager(store)
+	var ldapConfig *auth.LDAPConfig
+	if ldapHost := viper.GetString("ldap.host"); ldapHost != "" {
+		ldapConfig = &auth.LDAPConfig{
+			Host:         ldapHost,
+			Port:         viper.GetInt("ldap.port"),
+			UseTLS:       viper.GetBool("ldap.tls"),
+			StartTLS:     viper.GetBool("ldap.starttls"),
+			SkipVerify:   viper.GetBool("ldap.skip_verify"),
+			BindDN:       viper.GetString("ldap.bind_dn"),
+			BindPassword: viper.GetString("ldap.bind_password"),
+			BaseDN:       viper.GetString("ldap.base_dn"),
+			UserFilter:   viper.GetString("ldap.user_filter"),
+			GroupFilter:  viper.GetString("ldap.group_filter"),
+			GroupBaseDN:  viper.GetString("ldap.group_base_dn"),
+		}
+	}
+
+	authMgr, err := auth.NewManager(store, ldapConfig)
 	if err != nil {
 		log.Fatalf("Failed to initialise authentication: %v", err)
 	}
@@ -163,8 +180,9 @@ func runServe(cmd *cobra.Command, args []string) {
 		ServerAddr:     serverAddr,
 		Storage:        store,
 		Auth:           authMgr,
-		NBDEnabled:     viper.GetBool("nbd_enabled"),
-		NBDPort:        viper.GetInt("nbd_port"),
+		NBDEnabled:       viper.GetBool("nbd_enabled"),
+		NBDPort:          viper.GetInt("nbd_port"),
+		WOLBroadcastAddr: viper.GetString("wol_broadcast_addr"),
 	}
 
 	srv := server.New(cfg)

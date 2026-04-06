@@ -15,12 +15,18 @@ I've used Claude CLI to help with some parts of this project - mostly making the
 - **Single binary, zero config**: Everything bundled - bootloaders, web UI, database. Just run it
 - **50+ distro support**: Automatic kernel/initrd extraction with a generic fallback scanner for unknown ISOs
 - **Built-in diagnostic tools**: GParted, Clonezilla, Memtest86+, SystemRescue, ShredOS, Netboot.xyz - one-click download and enable from the admin UI
+- **Custom tools**: Add your own PXE-bootable tools with configurable boot methods (kernel, chain, memdisk)
 - **Per-client access control**: Assign specific images per MAC address, toggle public image visibility per client
+- **Client auto-discovery**: Clients are automatically detected when they PXE boot, like DHCP leases - promote to static when ready
+- **Next boot action**: Set a one-time boot image for a client with optional Wake-on-LAN - auto-clears after use
+- **Hardware inventory**: Automatic collection of CPU, memory, manufacturer, serial number, and NIC info from PXE clients
+- **JWT authentication**: Secure token-based auth with a dedicated login page, replacing browser basic auth dialogs
+- **LDAP/Active Directory**: Optional LDAP backend with group-based admin access - local accounts always work as fallback
 - **Swappable bootloaders**: Ship with embedded iPXE, or bring your own custom bootloader sets
 - **Secure Boot**: Microsoft-signed shim bootloader for UEFI Secure Boot environments
-- **Modern admin UI**: Sidebar navigation, real-time colour-coded logs, REST API
+- **Modern admin UI**: Sidebar navigation, consistent toolbars, real-time colour-coded logs, REST API
 - **Multi-database**: SQLite out of the box, PostgreSQL for production
-- **Docker and bare metal**: Multi-arch images (amd64/arm64) or a single static binarybut the 
+- **Docker and bare metal**: Multi-arch images (amd64/arm64) or a single static binary
 
 ## Screenshots
 
@@ -81,7 +87,8 @@ docker-compose up -d
 - **[Thin OS Boot Method](docs/thinos.md)** - Universal ISO boot via memdisk
 - **[Admin Console](docs/admin.md)** - Web UI and REST API reference
 - **[DHCP Configuration](docs/dhcp.md)** - Configure your DHCP server
-- **[Client Management](docs/clients.md)** - MAC-based access control
+- **[Client Management](docs/clients.md)** - MAC-based access control, auto-discovery, next boot
+- **[Authentication](docs/authentication.md)** - JWT auth, LDAP/Active Directory setup
 
 ## Boot Tools
 
@@ -98,6 +105,15 @@ Bootimus includes a built-in tools system for diagnostic and utility software. T
 | **HDT** | Hardware inventory and diagnostics |
 
 Download URLs are shown in the UI and can be overridden to point at local mirrors or newer versions.
+
+### Custom Tools
+
+You can add your own PXE-bootable tools via the **"+ Add Custom Tool"** button in the Tools section. Custom tools support:
+
+- **Boot methods**: Kernel/initrd, chain (EFI), or memdisk
+- **Archive types**: ZIP, single binary, or ISO
+- **Boot parameters**: With `{{HTTP_URL}}` placeholder for server URL substitution
+- **Download from URL**: Specify any HTTP/HTTPS URL for the tool files
 
 ## Bootloader Management
 
@@ -148,7 +164,6 @@ Groups are auto-created on startup and when scanning for ISOs. They can also be 
 ## Roadmap
 
 - iPXE colour theming (blocked on iPXE firmware compatibility)
-- Per-client bootloader selection
 - NetBSD/OpenBSD support
 
 ## Why Bootimus Over iVentoy?
@@ -160,7 +175,7 @@ Groups are auto-created on startup and when scanning for ISOs. They can also be 
 | **Embedded Bootloaders** | Yes | No |
 | **Database** | SQLite / PostgreSQL | File-based |
 | **Web UI** | Modern sidebar UI with REST API | Basic HTML |
-| **Authentication** | HTTP Basic Auth | None |
+| **Authentication** | JWT + LDAP/AD | None |
 | **Boot Logging** | Full tracking with live streaming | Limited |
 | **MAC-based ACL** | Granular per-client | No |
 | **ISO Upload** | Web upload + URL download | Manual copy |
@@ -230,7 +245,7 @@ Run `make help` for all available targets.
 - **Read-only TFTP**: TFTP server is read-only (no write operations)
 - **Path sanitisation**: All file paths sanitised to prevent directory traversal
 - **MAC address verification**: ISOs served only to authorised clients
-- **Admin authentication**: HTTP Basic Auth with SHA-256 password hashing
+- **Admin authentication**: JWT token-based auth with bcrypt password hashing, optional LDAP/AD backend
 - **Separate admin port**: Admin interface isolated from boot network
 - **Audit logs**: All boot attempts logged with client/image/success tracking
 
@@ -256,10 +271,10 @@ docker run --cap-add NET_BIND_SERVICE ...
 ls -la data/isos/
 
 # Scan for ISOs via API
-curl -u admin:password -X POST http://localhost:8081/api/scan
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8081/api/scan
 
 # Enable public access to images
-curl -u admin:password -X PUT http://localhost:8081/api/images?filename=ubuntu.iso \
+curl -H "Authorization: Bearer $TOKEN" -X PUT http://localhost:8081/api/images?filename=ubuntu.iso \
   -H "Content-Type: application/json" \
   -d '{"public": true, "enabled": true}'
 ```

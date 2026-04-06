@@ -11,17 +11,18 @@ import (
 )
 
 type MenuBuilder struct {
-	images       []models.Image
-	groups       []*models.ImageGroup
-	theme        *models.MenuTheme
-	macAddress   string
-	serverAddr   string
-	httpPort     int
-	groupStack   []uint
-	enabledTools []tools.EnabledTool
+	images           []models.Image
+	groups           []*models.ImageGroup
+	theme            *models.MenuTheme
+	macAddress       string
+	serverAddr       string
+	httpPort         int
+	groupStack       []uint
+	enabledTools     []tools.EnabledTool
+	nextBootImageID  uint
 }
 
-func (s *Server) generateIPXEMenuWithGroups(images []models.Image, macAddress string) string {
+func (s *Server) generateIPXEMenuWithGroups(images []models.Image, macAddress string, nextBootImageID ...uint) string {
 	groups, err := s.config.Storage.ListImageGroups()
 	if err != nil {
 		return s.generateIPXEMenu(images, macAddress)
@@ -35,14 +36,20 @@ func (s *Server) generateIPXEMenuWithGroups(images []models.Image, macAddress st
 	serverURL := fmt.Sprintf("http://%s:%d", s.config.ServerAddr, s.config.HTTPPort)
 	enabledTools := s.toolsManager.GetEnabledTools(serverURL)
 
+	var nbID uint
+	if len(nextBootImageID) > 0 {
+		nbID = nextBootImageID[0]
+	}
+
 	mb := &MenuBuilder{
-		images:       images,
-		groups:       groups,
-		theme:        theme,
-		macAddress:   macAddress,
-		serverAddr:   s.config.ServerAddr,
-		httpPort:     s.config.HTTPPort,
-		enabledTools: enabledTools,
+		images:          images,
+		groups:          groups,
+		theme:           theme,
+		macAddress:      macAddress,
+		serverAddr:      s.config.ServerAddr,
+		httpPort:        s.config.HTTPPort,
+		enabledTools:    enabledTools,
+		nextBootImageID: nbID,
 	}
 
 	return mb.Build()
@@ -96,12 +103,16 @@ func (mb *MenuBuilder) buildMainMenu() string {
 	rootGroups := mb.getRootGroups()
 	ungroupedImages := mb.getUngroupedImages()
 
-	if len(rootGroups) > 0 {
+	var visibleGroups []*models.ImageGroup
+	for _, group := range rootGroups {
+		if group.Enabled && mb.groupHasImages(group.ID) {
+			visibleGroups = append(visibleGroups, group)
+		}
+	}
+	if len(visibleGroups) > 0 {
 		sb.WriteString("item --gap -- Groups:\n")
-		for _, group := range rootGroups {
-			if group.Enabled {
-				sb.WriteString(fmt.Sprintf("item group%d %s\n", group.ID, group.Name))
-			}
+		for _, group := range visibleGroups {
+			sb.WriteString(fmt.Sprintf("item group%d %s\n", group.ID, group.Name))
 		}
 	}
 
@@ -125,14 +136,21 @@ func (mb *MenuBuilder) buildMainMenu() string {
 	sb.WriteString("item shell Drop to iPXE shell\n")
 	sb.WriteString("item reboot Reboot\n")
 	defaultItem := "exit"
-	if len(rootGroups) > 0 {
-		defaultItem = fmt.Sprintf("group%d", rootGroups[0].ID)
+	if mb.nextBootImageID > 0 {
+		defaultItem = fmt.Sprintf("iso%d", mb.nextBootImageID)
+	} else if len(visibleGroups) > 0 {
+		defaultItem = fmt.Sprintf("group%d", visibleGroups[0].ID)
 	} else if len(ungroupedImages) > 0 {
 		defaultItem = fmt.Sprintf("iso%d", ungroupedImages[0].ID)
 	}
 
-	if t := mb.menuTimeoutMs(); t > 0 {
-		sb.WriteString(fmt.Sprintf("choose --default %s --timeout %d selected || goto start\n", defaultItem, t))
+	timeoutMs := mb.menuTimeoutMs()
+	if mb.nextBootImageID > 0 && timeoutMs == 0 {
+		timeoutMs = 10000 // 10s override when next boot is set but global timeout is disabled
+	}
+
+	if timeoutMs > 0 {
+		sb.WriteString(fmt.Sprintf("choose --default %s --timeout %d selected || goto start\n", defaultItem, timeoutMs))
 	} else {
 		sb.WriteString(fmt.Sprintf("choose --default %s selected || goto start\n", defaultItem))
 	}
@@ -145,7 +163,7 @@ func (mb *MenuBuilder) buildGroupMenus() string {
 	var sb strings.Builder
 
 	for _, group := range mb.groups {
-		if !group.Enabled {
+		if !group.Enabled || !mb.groupHasImages(group.ID) {
 			continue
 		}
 
@@ -156,9 +174,15 @@ func (mb *MenuBuilder) buildGroupMenus() string {
 		groupImages := mb.getGroupImages(group.ID)
 
 		if len(childGroups) > 0 {
-			sb.WriteString("item --gap -- Subgroups:\n")
+			var visibleChildren []*models.ImageGroup
 			for _, child := range childGroups {
-				if child.Enabled {
+				if child.Enabled && mb.groupHasImages(child.ID) {
+					visibleChildren = append(visibleChildren, child)
+				}
+			}
+			if len(visibleChildren) > 0 {
+				sb.WriteString("item --gap -- Subgroups:\n")
+				for _, child := range visibleChildren {
 					sb.WriteString(fmt.Sprintf("item group%d %s\n", child.ID, child.Name))
 				}
 			}
@@ -279,7 +303,11 @@ func (mb *MenuBuilder) buildKernelBootSection(img *models.Image, encodedFilename
 		sb.WriteString("boot || goto failed\n")
 
 	case "debian":
-		sb.WriteString(fmt.Sprintf("kernel %s/boot/%s/vmlinuz%s%sinitrd=initrd ip=dhcp priority=critical\n", baseURL, cacheDir, autoInstallParam, bootParams))
+		if img.SquashfsPath != "" {
+			sb.WriteString(fmt.Sprintf("kernel %s/boot/%s/vmlinuz%s%sinitrd=initrd priority=critical fetch=%s/boot/%s/%s\n", baseURL, cacheDir, autoInstallParam, bootParams, baseURL, cacheDir, img.SquashfsPath))
+		} else {
+			sb.WriteString(fmt.Sprintf("kernel %s/boot/%s/vmlinuz%s%sinitrd=initrd priority=critical\n", baseURL, cacheDir, autoInstallParam, bootParams))
+		}
 		sb.WriteString(fmt.Sprintf("initrd %s/boot/%s/initrd\n", baseURL, cacheDir))
 		sb.WriteString("boot || goto failed\n")
 
@@ -390,6 +418,18 @@ func (mb *MenuBuilder) getUngroupedImages() []models.Image {
 		}
 	}
 	return result
+}
+
+func (mb *MenuBuilder) groupHasImages(groupID uint) bool {
+	if len(mb.getGroupImages(groupID)) > 0 {
+		return true
+	}
+	for _, child := range mb.getChildGroups(groupID) {
+		if child.Enabled && mb.groupHasImages(child.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (mb *MenuBuilder) getGroupImages(groupID uint) []models.Image {

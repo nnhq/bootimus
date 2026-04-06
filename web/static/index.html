@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bootimus Admin Panel</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         :root {
             --bg-primary: #f5f5f5;
@@ -69,6 +70,7 @@
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        html, body { height: 100%; margin: 0; overflow: hidden; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg-primary);
@@ -76,6 +78,7 @@
             line-height: 1.6;
             font-size: 15px;
             -webkit-font-smoothing: antialiased;
+            display: flex; flex-direction: column;
         }
 
         .container { max-width: 100%; margin: 0 auto; padding: 0; }
@@ -91,7 +94,7 @@
             align-items: center;
             border-bottom: 1px solid var(--border);
             box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-            position: sticky; top: 0; z-index: 50;
+            z-index: 50; flex-shrink: 0;
         }
         .header-content { flex: 1; }
         .header-content h1 { color: var(--text-primary); font-size: 22px; font-weight: 700; margin-bottom: 1px; letter-spacing: -0.3px; }
@@ -133,7 +136,7 @@
         .user-profile-dropdown button:hover { background: var(--bg-tertiary); }
 
         /* App layout - sidebar + main */
-        .app-layout { display: flex; min-height: calc(100vh - 57px); }
+        .app-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
         /* Sidebar */
         .sidebar {
@@ -141,8 +144,7 @@
             background: var(--bg-secondary);
             border-right: 1px solid var(--border);
             display: flex; flex-direction: column;
-            position: sticky; top: 57px; height: calc(100vh - 57px);
-            z-index: 40; overflow-y: auto;
+            overflow: hidden;
         }
         .sidebar-nav { flex: 1; padding: 16px 0; }
         .nav-group { margin-bottom: 12px; }
@@ -161,13 +163,14 @@
         .nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
 
         /* Main content area */
-        .main-content { flex: 1; min-width: 0; overflow: hidden; height: calc(100vh - 57px); display: flex; flex-direction: column; }
+        .main-content { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 
-        .content-area { padding: 16px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .content-area { padding: 16px; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
         .content-area > .stats { flex-shrink: 0; }
-        .tab-content.active { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-        .tab-content.active > .card { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        .tab-content.active { display: flex; flex-direction: column; flex: 1; overflow-y: auto; min-height: 0; }
+        .tab-content.active > .card { display: flex; flex-direction: column; }
         .card-body { flex-shrink: 0; }
+        .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 0 12px 12px; flex-shrink: 0; }
 
         /* Stats row */
         .stats { display: flex; gap: 10px; margin-bottom: 12px; }
@@ -187,7 +190,6 @@
         /* Hide old tabs - navigation is in sidebar now */
         .tabs { display: none; }
         .tab-content { display: none; }
-        .tab-content.active { display: block; }
 
         /* Cards - white, subtle shadow, NO border */
         .card {
@@ -197,7 +199,6 @@
             box-shadow: var(--shadow);
             border: none;
             padding: 0;
-            overflow: hidden;
         }
         .card h2 { color: var(--text-primary); margin-bottom: 8px; font-size: 16px; font-weight: 600; padding: 12px 12px 0; }
         .card-body { padding: 12px; padding-top: 0; }
@@ -449,7 +450,36 @@
     </style>
 </head>
 <body>
-    <header>
+    <!-- Login Screen -->
+    <div id="login-screen" style="display: none; position: fixed; inset: 0; z-index: 9999; background: var(--bg-primary); align-items: center; justify-content: center;">
+        <div style="width: 100%; max-width: 380px; padding: 24px;">
+            <div style="text-align: center; margin-bottom: 32px;">
+                <h1 style="font-size: 28px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">🚀 Bootimus</h1>
+                <p style="color: var(--text-secondary); font-size: 14px;">PXE/HTTP Boot Server</p>
+            </div>
+            <form id="login-form" style="background: var(--bg-secondary); padding: 28px; border-radius: var(--radius); box-shadow: var(--shadow);">
+                <div id="login-auth-selector" style="display: none; margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary);">Authentication</label>
+                    <select id="login-auth-method" style="width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px;">
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 16px;">
+                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary);">Username</label>
+                    <input type="text" name="username" id="login-username" required autocomplete="username" autofocus
+                        style="width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px;">
+                </div>
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary);">Password</label>
+                    <input type="password" name="password" id="login-password" required autocomplete="current-password"
+                        style="width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-primary); font-size: 14px;">
+                </div>
+                <div id="login-error" style="display: none; color: var(--danger); font-size: 13px; margin-bottom: 12px;"></div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 10px; font-size: 14px; font-weight: 600;">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <header id="main-header" style="display: none;">
         <div class="header-content">
             <h1>🚀 Bootimus Admin Panel</h1>
             <p>PXE/HTTP Boot Server Management Interface</p>
@@ -472,7 +502,7 @@
         </div>
     </header>
 
-    <div class="app-layout">
+    <div class="app-layout" id="main-app" style="display: none;">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <nav class="sidebar-nav">
@@ -499,6 +529,11 @@
                     <button class="nav-item" data-tab="logs"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Logs</button>
                 </div>
             </nav>
+            <div style="padding: 12px 16px; border-top: 1px solid var(--border); flex-shrink: 0;">
+                <button onclick="showModal('about-modal')" style="background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 6px;">
+                    🚀 Bootimus <span id="sidebar-version" style="color: var(--text-muted);">v...</span>
+                </button>
+            </div>
         </aside>
 
         <!-- Main Content -->
@@ -562,9 +597,14 @@
         <!-- Clients Tab -->
         <div id="clients-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>Client Management</h2>
+                <h2>Client Management</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Manage PXE boot clients. Discovered clients appear automatically when they connect.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showAddClientModal()">+ Add Client</button>
+                    <button class="btn btn-sm" onclick="loadClients()">Refresh</button>
+                    <button class="btn btn-sm btn-success" id="clients-autorefresh-btn" onclick="toggleClientsAutoRefresh()">Auto-Refresh: Off</button>
                 </div>
                 <div id="clients-table" class="loading">
                     <div class="spinner"></div>
@@ -576,8 +616,11 @@
         <!-- Images Tab -->
         <div id="images-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>Image Management</h2>
+                <h2>Image Management</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Upload, download, and manage OS images available for PXE booting.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showUploadModal()">📤 Upload ISO</button>
                     <button class="btn btn-primary" onclick="showDownloadModal()">⬇️ Download ISO</button>
                     <button class="btn btn-success" onclick="scanImages()">🔍 Scan for ISOs</button>
@@ -592,8 +635,11 @@
         <!-- Groups Tab -->
         <div id="groups-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>Image Groups</h2>
+                <h2>Image Groups</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Organise images into groups and subgroups for the PXE boot menu.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showAddGroupModal()">+ Add Group</button>
                 </div>
                 <div id="groups-table" class="loading">
@@ -606,9 +652,11 @@
         <!-- Public Files Tab -->
         <div id="public-files-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>Public Files</h2>
-                    <p style="color: var(--text-secondary); margin-bottom: 20px;">Public files are available to all clients. For image-specific files, go to the Images tab and manage files for each image.</p>
+                <h2>Public Files</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Files available to all clients. For image-specific files, manage them from the Images tab.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showUploadPublicFileModal()">+ Upload Public File</button>
                 </div>
                 <div id="public-files-table" class="loading">
@@ -621,8 +669,11 @@
         <!-- Users Tab -->
         <div id="users-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>User Management</h2>
+                <h2>User Management</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Manage admin panel user accounts and permissions.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showAddUserModal()">+ Add User</button>
                 </div>
                 <div id="users-table" class="loading">
@@ -636,9 +687,12 @@
         <div id="tools-tab" class="tab-content">
             <div class="card">
                 <h2>Boot Tools</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    Diagnostic and utility tools available in the PXE boot menu. Download a tool to make it available, then enable it to show in the boot menu.
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Download a tool to make it available, then enable it to show in the boot menu.
                 </p>
+                <div class="toolbar">
+                    <button class="btn btn-primary" onclick="showModal('add-custom-tool-modal')">+ Add Custom Tool</button>
+                </div>
                 <div id="tools-list" class="loading">
                     <div class="spinner"></div>
                     Loading tools...
@@ -649,11 +703,11 @@
         <!-- Bootloaders Tab -->
         <div id="bootloaders-tab" class="tab-content">
             <div class="card">
-                <div class="card-body">
-                    <h2>Bootloader Management</h2>
-                    <p style="color: var(--text-secondary); margin-bottom: 12px;">
-                        Manage iPXE bootloader sets served to PXE clients. Create custom sets with your own bootloader files, or place them directly in <code>data/bootloaders/&lt;set-name&gt;/</code>.
-                    </p>
+                <h2>Bootloader Management</h2>
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Manage iPXE bootloader sets served to PXE clients. Create custom sets with your own bootloader files.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-primary" onclick="showCreateBootloaderSetModal()">+ Create Set</button>
                 </div>
                 <div id="bootloaders-table" class="loading">
@@ -692,7 +746,7 @@
                     Download bootable USB images for machines that don't support PXE network booting.
                     Write to a USB stick and boot from it to access the bootimus menu.
                 </p>
-                <div id="usb-images-content">
+                <div id="usb-images-content" style="padding: 0 12px 12px;">
                     <div class="loading">
                         <div class="spinner"></div>
                         Loading...
@@ -705,20 +759,26 @@
         <div id="logs-tab" class="tab-content">
             <div class="card">
                 <h2>Server Logs</h2>
-                <div style="margin-bottom: 10px;">
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Live server log output for TFTP, HTTP, and PXE boot activity.
+                </p>
+                <div class="toolbar">
                     <button class="btn btn-sm btn-success" id="connect-logs-btn" onclick="connectLiveLogs()">Start Auto-Refresh</button>
                     <button class="btn btn-sm btn-danger" id="disconnect-logs-btn" onclick="disconnectLiveLogs()" style="display: none;">Stop Auto-Refresh</button>
                     <button class="btn btn-sm" onclick="loadServerLogs()">Refresh Now</button>
                     <button class="btn btn-sm" onclick="clearLiveLogs()">Clear</button>
-                    <span id="log-status" style="margin-left: 10px; color: var(--text-secondary); font-size: 12px;"></span>
+                    <span id="log-status" style="color: var(--text-secondary); font-size: 12px;"></span>
                 </div>
-                <div id="live-logs" style="background: #1a1a1a; padding: 16px; border-radius: var(--radius-sm); max-height: 500px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; color: #e0e0e0;">
+                <div id="live-logs" style="background: #1a1a1a; padding: 16px; border-radius: var(--radius-sm); max-height: 500px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; color: #e0e0e0; margin: 0 12px 12px;">
                     <div style="color: var(--text-secondary);">Click "Refresh Now" to load server logs...</div>
                 </div>
             </div>
             <div class="card">
                 <h2>Boot Attempt History</h2>
-                <div id="logs-table" class="loading">
+                <p style="color: var(--text-secondary); margin: 0 12px 8px; font-size: 13px;">
+                    Record of all PXE boot attempts by clients.
+                </p>
+                <div id="logs-table" class="loading" style="padding: 0 12px 12px;">
                     <div class="spinner"></div>
                     Loading logs...
                 </div>
@@ -834,6 +894,138 @@
                 <button type="submit" class="btn btn-primary">Update Client</button>
                 <button type="button" class="btn" onclick="closeModal('edit-client-modal')">Cancel</button>
             </form>
+            <div id="client-hardware-info" style="display:none; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <h3 style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Hardware Information</h3>
+                    <button type="button" class="btn btn-sm" onclick="showInventoryHistory()">View History</button>
+                </div>
+                <div id="client-hw-details"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="next-boot-modal" class="modal">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2>Set Next Boot Action</h2>
+            </div>
+            <p style="color: var(--text-secondary); margin-bottom: 16px;">Select an image to boot on the next PXE boot. This is a one-time action that clears after use.</p>
+            <div class="form-group">
+                <label>Client</label>
+                <input type="text" id="next-boot-mac" readonly>
+            </div>
+            <div class="form-group">
+                <label>Boot Image</label>
+                <select id="next-boot-image-select">
+                </select>
+            </div>
+            <div id="next-boot-current" style="margin-bottom: 16px; display: none;">
+                <span style="color: var(--text-secondary);">Current next boot: </span>
+                <span id="next-boot-current-image" class="badge badge-info"></span>
+                <button class="btn btn-sm btn-danger" onclick="clearNextBoot()" style="margin-left: 8px;">Clear</button>
+            </div>
+            <button class="btn btn-primary" onclick="saveNextBoot()">Set Next Boot</button>
+            <button class="btn btn-success" onclick="saveNextBootAndWake()" style="margin-left: 8px;">Set & Wake</button>
+            <button type="button" class="btn" onclick="closeModal('next-boot-modal')">Cancel</button>
+        </div>
+    </div>
+
+    <div id="add-custom-tool-modal" class="modal">
+        <div class="modal-content" style="max-width: 560px;">
+            <div class="modal-header">
+                <h2>Add Custom Tool</h2>
+            </div>
+            <form id="add-custom-tool-form">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group">
+                        <label>Name (unique ID)</label>
+                        <input type="text" name="name" required placeholder="e.g. my-tool">
+                    </div>
+                    <div class="form-group">
+                        <label>Display Name</label>
+                        <input type="text" name="display_name" required placeholder="e.g. My Tool">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" name="description" placeholder="Short description">
+                </div>
+                <div class="form-group">
+                    <label>Download URL</label>
+                    <input type="url" name="download_url" required placeholder="https://example.com/tool.zip">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group">
+                        <label>Boot Method</label>
+                        <select name="boot_method">
+                            <option value="kernel">Kernel/Initrd</option>
+                            <option value="chain">Chain (EFI)</option>
+                            <option value="memdisk">Memdisk</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Archive Type</label>
+                        <select name="archive_type">
+                            <option value="bin">Single Binary</option>
+                            <option value="zip">ZIP Archive</option>
+                            <option value="iso">ISO Image</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group">
+                        <label>Kernel/Binary Path</label>
+                        <input type="text" name="kernel_path" placeholder="e.g. vmlinuz or tool.efi">
+                        <small style="color: var(--text-secondary);">Path within extracted archive or filename for binary</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Initrd Path</label>
+                        <input type="text" name="initrd_path" placeholder="e.g. initrd.img (optional)">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Boot Parameters</label>
+                    <input type="text" name="boot_params" placeholder="Optional kernel params. Use {{HTTP_URL}} for server URL.">
+                </div>
+                <div class="form-group">
+                    <label>Version</label>
+                    <input type="text" name="version" placeholder="e.g. 1.0.0">
+                </div>
+                <button type="submit" class="btn btn-primary">Create Tool</button>
+                <button type="button" class="btn" onclick="closeModal('add-custom-tool-modal')">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="about-modal" class="modal">
+        <div class="modal-content" style="max-width: 420px; text-align: center;">
+            <div style="margin-bottom: 20px;">
+                <div style="font-size: 48px; margin-bottom: 8px;">🚀</div>
+                <h2 style="font-size: 22px; font-weight: 700; margin-bottom: 4px; padding: 0;">Bootimus</h2>
+                <p style="color: var(--text-secondary); font-size: 13px; margin: 0;">PXE/HTTP Boot Server</p>
+                <p id="about-version" style="color: var(--text-muted); font-size: 12px; margin: 6px 0 0;"></p>
+            </div>
+            <div style="text-align: left; font-size: 13px; color: var(--text-secondary); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 16px;">
+                <p><strong style="color: var(--text-primary);">GitHub</strong><br>
+                <a href="https://github.com/garybowers/bootimus" target="_blank" style="color: var(--teal);">github.com/garybowers/bootimus</a></p>
+                <p style="margin-top: 12px;"><strong style="color: var(--text-primary);">Report Issues</strong><br>
+                <a href="https://github.com/garybowers/bootimus/issues" target="_blank" style="color: var(--teal);">github.com/garybowers/bootimus/issues</a></p>
+                <p style="margin-top: 12px;"><strong style="color: var(--text-primary);">Docker Hub</strong><br>
+                <a href="https://hub.docker.com/r/garybowers/bootimus" target="_blank" style="color: var(--teal);">hub.docker.com/r/garybowers/bootimus</a></p>
+                <p style="margin-top: 12px;"><strong style="color: var(--text-primary);">Licence</strong><br>
+                Apache License 2.0</p>
+            </div>
+            <button type="button" class="btn" onclick="closeModal('about-modal')" style="margin-top: 16px;">Close</button>
+        </div>
+    </div>
+
+    <div id="inventory-history-modal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2>Hardware Inventory History</h2>
+            </div>
+            <div id="inventory-history-table"></div>
+            <button type="button" class="btn" onclick="closeModal('inventory-history-modal')" style="margin-top: 12px;">Close</button>
         </div>
     </div>
 

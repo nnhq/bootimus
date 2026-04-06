@@ -22,6 +22,8 @@ type Storage interface {
 	AssignImagesToClient(mac string, imageFilenames []string) error
 	GetClientImages(mac string) ([]string, error)
 	GetImagesForClient(macAddress string) ([]models.Image, error)
+	SetNextBootImage(mac string, imageFilename string) error
+	ClearNextBootImage(mac string) error
 
 	EnsureAdminUser() (username, password string, created bool, err error)
 	ResetAdminPassword() (string, error)
@@ -63,11 +65,16 @@ type Storage interface {
 	ListBootTools() ([]*models.BootTool, error)
 	GetBootTool(name string) (*models.BootTool, error)
 	SaveBootTool(tool *models.BootTool) error
+	DeleteBootTool(name string) error
 
 	LogBootAttempt(macAddress, imageName, ipAddress string, success bool, errorMsg string) error
 	UpdateClientBootStats(macAddress string) error
 	UpdateImageBootStats(imageName string) error
 	GetBootLogs(limit int) ([]models.BootLog, error)
+
+	SaveHardwareInventory(inventory *models.HardwareInventory) error
+	GetLatestHardwareInventory(mac string) (*models.HardwareInventory, error)
+	GetHardwareInventoryHistory(mac string, limit int) ([]models.HardwareInventory, error)
 
 	GetStats() (map[string]int64, error)
 }

@@ -56,6 +56,7 @@ func (s *PostgresStore) AutoMigrate() error {
 		&models.DriverPack{},
 		&models.MenuTheme{},
 		&models.BootTool{},
+		&models.HardwareInventory{},
 	); err != nil {
 		return err
 	}
@@ -138,6 +139,10 @@ func (s *PostgresStore) SaveBootTool(tool *models.BootTool) error {
 	return s.db.Save(tool).Error
 }
 
+func (s *PostgresStore) DeleteBootTool(name string) error {
+	return s.db.Unscoped().Where("name = ?", name).Delete(&models.BootTool{}).Error
+}
+
 func (s *PostgresStore) Close() error {
 	return nil
 }
@@ -165,7 +170,7 @@ func (s *PostgresStore) CreateClient(client *models.Client) error {
 
 func (s *PostgresStore) UpdateClient(mac string, client *models.Client) error {
 	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
-		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "UpdatedAt").
+		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "Static", "UpdatedAt").
 		Updates(client).Error
 }
 
@@ -319,6 +324,16 @@ func (s *PostgresStore) AssignImagesToClient(mac string, imageFilenames []string
 	}).Error
 }
 
+func (s *PostgresStore) SetNextBootImage(mac string, imageFilename string) error {
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Update("next_boot_image", imageFilename).Error
+}
+
+func (s *PostgresStore) ClearNextBootImage(mac string) error {
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Update("next_boot_image", "").Error
+}
+
 func (s *PostgresStore) GetClientImages(mac string) ([]string, error) {
 	var client models.Client
 	if err := s.db.Preload("Images").Where("mac_address = ?", mac).First(&client).Error; err != nil {
@@ -338,7 +353,7 @@ func (s *PostgresStore) GetImagesForClient(macAddress string) ([]models.Image, e
 		log.Printf("GetImagesForClient: client=%s, AllowedImages=%v, ShowPublicImages=%v", macAddress, client.AllowedImages, client.ShowPublicImages)
 		var assigned []models.Image
 		if len(client.AllowedImages) > 0 {
-			s.db.Where("filename IN ? AND enabled = ?", client.AllowedImages, true).Find(&assigned)
+			s.db.Where("filename IN (?) AND enabled = ?", []string(client.AllowedImages), true).Find(&assigned)
 			log.Printf("GetImagesForClient: found %d assigned images for %v", len(assigned), client.AllowedImages)
 		}
 
@@ -676,6 +691,56 @@ func (s *PostgresStore) GetBootLogs(limit int) ([]models.BootLog, error) {
 	return logs, nil
 }
 
+
+func (s *PostgresStore) SaveHardwareInventory(inv *models.HardwareInventory) error {
+	if inv.MACAddress != "" {
+		var client models.Client
+		if err := s.db.Where("mac_address = ?", inv.MACAddress).First(&client).Error; err == nil {
+			inv.ClientID = &client.ID
+		} else {
+			// Check for soft-deleted client and restore it
+			var deleted models.Client
+			if err := s.db.Unscoped().Where("mac_address = ? AND deleted_at IS NOT NULL", inv.MACAddress).First(&deleted).Error; err == nil {
+				deleted.DeletedAt = gorm.DeletedAt{}
+				deleted.Enabled = true
+				deleted.ShowPublicImages = true
+				deleted.Static = false
+				s.db.Unscoped().Save(&deleted)
+				inv.ClientID = &deleted.ID
+				log.Printf("Storage: Restored soft-deleted client for MAC %s", inv.MACAddress)
+			} else {
+				// Auto-create a dynamic (discovered) client
+				client = models.Client{
+					MACAddress:       inv.MACAddress,
+					Enabled:          true,
+					ShowPublicImages: true,
+					Static:           false,
+				}
+				if err := s.db.Create(&client).Error; err == nil {
+					inv.ClientID = &client.ID
+					log.Printf("Storage: Auto-created dynamic client for MAC %s", inv.MACAddress)
+				}
+			}
+		}
+	}
+	return s.db.Create(inv).Error
+}
+
+func (s *PostgresStore) GetLatestHardwareInventory(mac string) (*models.HardwareInventory, error) {
+	var inv models.HardwareInventory
+	if err := s.db.Where("mac_address = ?", mac).Order("created_at DESC").First(&inv).Error; err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (s *PostgresStore) GetHardwareInventoryHistory(mac string, limit int) ([]models.HardwareInventory, error) {
+	var history []models.HardwareInventory
+	if err := s.db.Where("mac_address = ?", mac).Order("created_at DESC").Limit(limit).Find(&history).Error; err != nil {
+		return nil, err
+	}
+	return history, nil
+}
 
 func (s *PostgresStore) GetStats() (map[string]int64, error) {
 	stats := make(map[string]int64)

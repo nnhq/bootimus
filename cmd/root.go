@@ -49,6 +49,18 @@ func init() {
 	rootCmd.PersistentFlags().String("db-name", "bootimus", "PostgreSQL database name")
 	rootCmd.PersistentFlags().String("db-sslmode", "disable", "PostgreSQL SSL mode")
 
+	rootCmd.PersistentFlags().String("ldap-host", "", "LDAP server hostname (enables LDAP auth)")
+	rootCmd.PersistentFlags().Int("ldap-port", 389, "LDAP server port")
+	rootCmd.PersistentFlags().Bool("ldap-tls", false, "Use LDAPS (TLS)")
+	rootCmd.PersistentFlags().Bool("ldap-starttls", false, "Use StartTLS")
+	rootCmd.PersistentFlags().Bool("ldap-skip-verify", false, "Skip TLS certificate verification")
+	rootCmd.PersistentFlags().String("ldap-bind-dn", "", "LDAP bind DN for search")
+	rootCmd.PersistentFlags().String("ldap-bind-password", "", "LDAP bind password")
+	rootCmd.PersistentFlags().String("ldap-base-dn", "", "LDAP base DN for user search")
+	rootCmd.PersistentFlags().String("ldap-user-filter", "(sAMAccountName=%s)", "LDAP user search filter (%s = username)")
+	rootCmd.PersistentFlags().String("ldap-group-filter", "", "LDAP group filter for admin access (optional)")
+	rootCmd.PersistentFlags().String("ldap-group-base-dn", "", "LDAP base DN for group search")
+
 	viper.BindPFlag("tftp_port", rootCmd.PersistentFlags().Lookup("tftp-port"))
 	viper.BindPFlag("tftp_single_port", rootCmd.PersistentFlags().Lookup("tftp-single-port"))
 	viper.BindPFlag("http_port", rootCmd.PersistentFlags().Lookup("http-port"))
@@ -63,6 +75,18 @@ func init() {
 	viper.BindPFlag("db.password", rootCmd.PersistentFlags().Lookup("db-password"))
 	viper.BindPFlag("db.name", rootCmd.PersistentFlags().Lookup("db-name"))
 	viper.BindPFlag("db.sslmode", rootCmd.PersistentFlags().Lookup("db-sslmode"))
+
+	viper.BindPFlag("ldap.host", rootCmd.PersistentFlags().Lookup("ldap-host"))
+	viper.BindPFlag("ldap.port", rootCmd.PersistentFlags().Lookup("ldap-port"))
+	viper.BindPFlag("ldap.tls", rootCmd.PersistentFlags().Lookup("ldap-tls"))
+	viper.BindPFlag("ldap.starttls", rootCmd.PersistentFlags().Lookup("ldap-starttls"))
+	viper.BindPFlag("ldap.skip_verify", rootCmd.PersistentFlags().Lookup("ldap-skip-verify"))
+	viper.BindPFlag("ldap.bind_dn", rootCmd.PersistentFlags().Lookup("ldap-bind-dn"))
+	viper.BindPFlag("ldap.bind_password", rootCmd.PersistentFlags().Lookup("ldap-bind-password"))
+	viper.BindPFlag("ldap.base_dn", rootCmd.PersistentFlags().Lookup("ldap-base-dn"))
+	viper.BindPFlag("ldap.user_filter", rootCmd.PersistentFlags().Lookup("ldap-user-filter"))
+	viper.BindPFlag("ldap.group_filter", rootCmd.PersistentFlags().Lookup("ldap-group-filter"))
+	viper.BindPFlag("ldap.group_base_dn", rootCmd.PersistentFlags().Lookup("ldap-group-base-dn"))
 }
 
 func initConfig() {

@@ -31,7 +31,7 @@ func NewSQLiteStore(dataDir string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) AutoMigrate() error {
-	if err := s.db.AutoMigrate(&models.User{}, &models.Client{}, &models.ImageGroup{}, &models.Image{}, &models.BootLog{}, &models.CustomFile{}, &models.DriverPack{}, &models.MenuTheme{}, &models.BootTool{}); err != nil {
+	if err := s.db.AutoMigrate(&models.User{}, &models.Client{}, &models.ImageGroup{}, &models.Image{}, &models.BootLog{}, &models.CustomFile{}, &models.DriverPack{}, &models.MenuTheme{}, &models.BootTool{}, &models.HardwareInventory{}); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -76,7 +76,7 @@ func (s *SQLiteStore) CreateClient(client *models.Client) error {
 
 func (s *SQLiteStore) UpdateClient(mac string, client *models.Client) error {
 	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
-		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "UpdatedAt").
+		Select("Name", "Description", "Enabled", "ShowPublicImages", "BootloaderSet", "Static", "UpdatedAt").
 		Updates(client).Error
 }
 
@@ -130,12 +130,72 @@ func (s *SQLiteStore) AssignImagesToClient(mac string, imageFilenames []string) 
 	}).Error
 }
 
+func (s *SQLiteStore) SetNextBootImage(mac string, imageFilename string) error {
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Update("next_boot_image", imageFilename).Error
+}
+
+func (s *SQLiteStore) ClearNextBootImage(mac string) error {
+	return s.db.Model(&models.Client{}).Where("mac_address = ?", mac).
+		Update("next_boot_image", "").Error
+}
+
 func (s *SQLiteStore) GetClientImages(mac string) ([]string, error) {
 	var client models.Client
 	if err := s.db.Where("mac_address = ?", mac).First(&client).Error; err != nil {
 		return nil, err
 	}
 	return client.AllowedImages, nil
+}
+
+func (s *SQLiteStore) SaveHardwareInventory(inv *models.HardwareInventory) error {
+	if inv.MACAddress != "" {
+		var client models.Client
+		if err := s.db.Where("mac_address = ?", inv.MACAddress).First(&client).Error; err == nil {
+			inv.ClientID = &client.ID
+		} else {
+			// Check for soft-deleted client and restore it
+			var deleted models.Client
+			if err := s.db.Unscoped().Where("mac_address = ? AND deleted_at IS NOT NULL", inv.MACAddress).First(&deleted).Error; err == nil {
+				deleted.DeletedAt = gorm.DeletedAt{}
+				deleted.Enabled = true
+				deleted.ShowPublicImages = true
+				deleted.Static = false
+				s.db.Unscoped().Save(&deleted)
+				inv.ClientID = &deleted.ID
+				log.Printf("Storage: Restored soft-deleted client for MAC %s", inv.MACAddress)
+			} else {
+				// Auto-create a dynamic (discovered) client
+				client = models.Client{
+					MACAddress:       inv.MACAddress,
+					Enabled:          true,
+					ShowPublicImages: true,
+					Static:           false,
+				}
+				if err := s.db.Create(&client).Error; err == nil {
+					inv.ClientID = &client.ID
+					log.Printf("Storage: Auto-created dynamic client for MAC %s", inv.MACAddress)
+				}
+			}
+		}
+	}
+	return s.db.Create(inv).Error
+}
+
+func (s *SQLiteStore) GetLatestHardwareInventory(mac string) (*models.HardwareInventory, error) {
+	var inv models.HardwareInventory
+	if err := s.db.Where("mac_address = ?", mac).Order("created_at DESC").First(&inv).Error; err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func (s *SQLiteStore) GetHardwareInventoryHistory(mac string, limit int) ([]models.HardwareInventory, error) {
+	var history []models.HardwareInventory
+	if err := s.db.Where("mac_address = ?", mac).Order("created_at DESC").Limit(limit).Find(&history).Error; err != nil {
+		return nil, err
+	}
+	return history, nil
 }
 
 func (s *SQLiteStore) GetStats() (map[string]int64, error) {
@@ -419,7 +479,7 @@ func (s *SQLiteStore) GetImagesForClient(macAddress string) ([]models.Image, err
 		log.Printf("GetImagesForClient: client=%s, AllowedImages=%v, ShowPublicImages=%v", macAddress, client.AllowedImages, client.ShowPublicImages)
 		var assigned []models.Image
 		if len(client.AllowedImages) > 0 {
-			s.db.Where("filename IN ? AND enabled = ?", client.AllowedImages, true).Find(&assigned)
+			s.db.Where("filename IN (?) AND enabled = ?", []string(client.AllowedImages), true).Find(&assigned)
 			if len(assigned) == 0 {
 				// Debug: list all image filenames to find the mismatch
 				var allImages []models.Image
@@ -648,6 +708,10 @@ func (s *SQLiteStore) GetBootTool(name string) (*models.BootTool, error) {
 
 func (s *SQLiteStore) SaveBootTool(tool *models.BootTool) error {
 	return s.db.Save(tool).Error
+}
+
+func (s *SQLiteStore) DeleteBootTool(name string) error {
+	return s.db.Unscoped().Where("name = ?", name).Delete(&models.BootTool{}).Error
 }
 
 func (s *SQLiteStore) Close() error {
