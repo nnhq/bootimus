@@ -92,6 +92,14 @@ func (e *Extractor) Extract(isoPath string) (*BootFiles, error) {
 	return bootFiles, nil
 }
 
+func relativeISOBase(dataDir, isoPath string) string {
+	rel, err := filepath.Rel(dataDir, isoPath)
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		rel = filepath.Base(isoPath)
+	}
+	return strings.TrimSuffix(rel, filepath.Ext(rel))
+}
+
 func (e *Extractor) extractViaBsdtar(isoPath string) (*BootFiles, error) {
 	bsdtarPath, err := exec.LookPath("bsdtar")
 	if err != nil {
@@ -99,7 +107,7 @@ func (e *Extractor) extractViaBsdtar(isoPath string) (*BootFiles, error) {
 	}
 
 	filename := filepath.Base(isoPath)
-	isoBase := strings.TrimSuffix(filename, filepath.Ext(filename))
+	isoBase := relativeISOBase(e.dataDir, isoPath)
 	extractDir := filepath.Join(e.dataDir, "isos", isoBase, "iso")
 
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
@@ -797,7 +805,7 @@ func (e *Extractor) detectWindows(img *iso9660.Image) (*BootFiles, error) {
 }
 
 func (e *Extractor) cacheBootFiles(files *BootFiles, img *iso9660.Image, isoPath string) error {
-	isoBase := strings.TrimSuffix(filepath.Base(isoPath), filepath.Ext(isoPath))
+	isoBase := relativeISOBase(e.dataDir, isoPath)
 	bootFilesDir := filepath.Join(e.dataDir, isoBase)
 
 	if err := os.MkdirAll(bootFilesDir, 0755); err != nil {

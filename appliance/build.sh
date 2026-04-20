@@ -4,21 +4,68 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 BUILD_DIR="$HERE/build"
-IMAGE_NAME="bootimus-appliance.img"
-IMAGE_SIZE_BYTES="${IMAGE_SIZE_BYTES:-2147483648}"   # 2 GiB default
+VERSION="$(cat "$REPO_ROOT/VERSION")"
+
+APPLIANCE_ARCH="${APPLIANCE_ARCH:-amd64}"
+case "$APPLIANCE_ARCH" in
+    amd64)
+        GO_ARCH=amd64
+        ALPINE_ARCH=x86_64
+        GRUB_TARGET=x86_64-efi
+        EFI_BINARY=BOOTX64.EFI
+        ;;
+    arm64)
+        GO_ARCH=arm64
+        ALPINE_ARCH=aarch64
+        GRUB_TARGET=arm64-efi
+        EFI_BINARY=BOOTAA64.EFI
+        ;;
+    *)
+        echo "ERROR: APPLIANCE_ARCH must be 'amd64' or 'arm64' (got: $APPLIANCE_ARCH)"
+        exit 1
+        ;;
+esac
+
+IMAGE_NAME="bootimus-appliance-${VERSION}-${APPLIANCE_ARCH}.img"
+IMAGE_SIZE_BYTES="${IMAGE_SIZE_BYTES:-2147483648}"
 ALPINE_BRANCH="${ALPINE_BRANCH:-v3.20}"
 ALPINE_MIRROR="${ALPINE_MIRROR:-http://dl-cdn.alpinelinux.org/alpine}"
 
 mkdir -p "$BUILD_DIR"
 
-echo ">> [1/3] Cross-compiling bootimus for linux/amd64…"
-(
-    cd "$REPO_ROOT"
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -ldflags="-w -s -X bootimus/internal/server.Version=$(cat VERSION)-appliance" \
-        -o "$BUILD_DIR/bootimus" .
-)
-echo "   $(du -h "$BUILD_DIR/bootimus" | cut -f1)"
+HOST_ARCH=$(uname -m)
+case "$HOST_ARCH:$APPLIANCE_ARCH" in
+    x86_64:amd64|aarch64:arm64)
+        ;; # native
+    *)
+        if ! [ -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ] && [ "$APPLIANCE_ARCH" = "arm64" ]; then
+            echo "ERROR: cross-building arm64 on $HOST_ARCH needs qemu-user-static + binfmt_misc on the host."
+            echo "       On Arch:   sudo pacman -S qemu-user-static qemu-user-static-binfmt"
+            echo "       On Debian: sudo apt install qemu-user-static binfmt-support"
+            echo "       Or build on an actual arm64 machine."
+            exit 1
+        fi
+        if ! [ -f /proc/sys/fs/binfmt_misc/qemu-x86_64 ] && [ "$APPLIANCE_ARCH" = "amd64" ]; then
+            echo "ERROR: cross-building amd64 on $HOST_ARCH needs qemu-user-static + binfmt_misc on the host."
+            exit 1
+        fi
+        ;;
+esac
+
+PREBUILT="$REPO_ROOT/bootimus-linux-${GO_ARCH}"
+if [ -x "$PREBUILT" ]; then
+    echo ">> [1/3] Reusing existing $PREBUILT…"
+    cp "$PREBUILT" "$BUILD_DIR/bootimus"
+else
+    echo ">> [1/3] Cross-compiling bootimus $VERSION for linux/$GO_ARCH…"
+    (
+        cd "$REPO_ROOT"
+        CGO_ENABLED=0 GOOS=linux GOARCH="$GO_ARCH" \
+            go build -ldflags="-w -s -X bootimus/internal/server.Version=${VERSION}" \
+            -o "$BUILD_DIR/bootimus" .
+    )
+fi
+echo "   $(du -h "$BUILD_DIR/bootimus" | cut -f1) — $APPLIANCE_ARCH $VERSION"
 
 STAGE="$BUILD_DIR/stage"
 rm -rf "$STAGE"
@@ -26,7 +73,7 @@ mkdir -p "$STAGE/usr/local/bin"
 cp -a "$HERE/overlay/." "$STAGE/"
 cp "$BUILD_DIR/bootimus" "$STAGE/usr/local/bin/bootimus"
 
-echo ">> [2/3] Building Alpine image in Docker (no host kernel state touched)…"
+echo ">> [2/3] Building Alpine image for $APPLIANCE_ARCH ($ALPINE_ARCH) in Docker…"
 docker run --rm --privileged \
     -v /dev:/dev \
     -v "$BUILD_DIR:/out" \
@@ -34,48 +81,51 @@ docker run --rm --privileged \
     -v "$HERE/setup.sh:/setup.sh:ro" \
     -e ALPINE_BRANCH="$ALPINE_BRANCH" \
     -e ALPINE_MIRROR="$ALPINE_MIRROR" \
+    -e ALPINE_ARCH="$ALPINE_ARCH" \
     -e IMAGE_SIZE_BYTES="$IMAGE_SIZE_BYTES" \
     -e IMAGE_NAME="$IMAGE_NAME" \
+    -e GRUB_TARGET="$GRUB_TARGET" \
+    -e EFI_BINARY="$EFI_BINARY" \
     alpine:${ALPINE_BRANCH#v} sh -euxc '
         apk add --no-cache \
-            apk-tools \
-            bash \
-            coreutils \
-            e2fsprogs \
-            parted \
-            syslinux \
-            util-linux
+            apk-tools bash coreutils e2fsprogs dosfstools mtools \
+            parted util-linux grub grub-efi
 
         IMG=/out/"$IMAGE_NAME"
         rm -f "$IMG"
         truncate -s "$IMAGE_SIZE_BYTES" "$IMG"
 
-        parted -s "$IMG" mklabel msdos
-        parted -s "$IMG" mkpart primary ext4 1MiB 100%
-        parted -s "$IMG" set 1 boot on
+        parted -s "$IMG" mklabel gpt
+        parted -s "$IMG" mkpart ESP fat32 1MiB 257MiB
+        parted -s "$IMG" set 1 esp on
+        parted -s "$IMG" mkpart root ext4 257MiB 100%
 
         LOOP=$(losetup -f --show -P "$IMG")
         trap "umount -R /mnt/rootfs 2>/dev/null || true; losetup -d $LOOP 2>/dev/null || true" EXIT
 
-        mkfs.ext4 -F -L bootimus "${LOOP}p1"
+        mkfs.vfat -F 32 -n BOOTIMUS "${LOOP}p1"
+        mkfs.ext4 -F -L bootimus "${LOOP}p2"
 
         mkdir -p /mnt/rootfs
-        mount "${LOOP}p1" /mnt/rootfs
+        mount "${LOOP}p2" /mnt/rootfs
+        mkdir -p /mnt/rootfs/boot/efi
+        mount "${LOOP}p1" /mnt/rootfs/boot/efi
 
         REPO="$ALPINE_MIRROR/$ALPINE_BRANCH/main"
         COMMUNITY="$ALPINE_MIRROR/$ALPINE_BRANCH/community"
 
-        apk --root=/mnt/rootfs --initdb \
+        apk --root=/mnt/rootfs --initdb --arch="$ALPINE_ARCH" \
             -X "$REPO" -X "$COMMUNITY" \
             --allow-untrusted \
-            add alpine-base linux-lts syslinux openrc busybox-openrc \
+            add alpine-base linux-lts openrc busybox-openrc \
                 ca-certificates curl dhcpcd e2fsprogs iproute2 iptables \
                 openssh-server samba samba-common-tools dnsmasq \
-                bash mkinitfs nano htop tzdata
+                bash mkinitfs nano htop tzdata grub grub-efi efibootmgr
 
         mkdir -p /mnt/rootfs/etc/apk
         echo "$REPO" >  /mnt/rootfs/etc/apk/repositories
         echo "$COMMUNITY" >> /mnt/rootfs/etc/apk/repositories
+        echo "$ALPINE_ARCH" > /mnt/rootfs/etc/apk/arch
 
         cp -a /stage/. /mnt/rootfs/
         cp /etc/resolv.conf /mnt/rootfs/etc/resolv.conf 2>/dev/null || true
@@ -90,27 +140,31 @@ docker run --rm --privileged \
         chroot /mnt/rootfs /setup.sh
         rm /mnt/rootfs/setup.sh
 
-        UUID=$(blkid -s UUID -o value "${LOOP}p1")
-        mkdir -p /mnt/rootfs/boot/extlinux
-        cat > /mnt/rootfs/boot/extlinux/extlinux.conf <<CFG
-DEFAULT bootimus
-PROMPT 0
-TIMEOUT 20
-LABEL bootimus
-    LINUX /boot/vmlinuz-lts
-    INITRD /boot/initramfs-lts
-    APPEND root=UUID=$UUID modules=sd-mod,usb-storage,ext4 rw quiet
+        ROOT_UUID=$(blkid -s UUID -o value "${LOOP}p2")
+        mkdir -p /mnt/rootfs/boot/grub
+        cat > /mnt/rootfs/boot/grub/grub.cfg <<CFG
+set timeout=3
+set default=0
+menuentry "Bootimus Appliance" {
+    linux /boot/vmlinuz-lts root=UUID=$ROOT_UUID rw quiet modules=sd-mod,usb-storage,ext4
+    initrd /boot/initramfs-lts
+}
 CFG
 
-        chroot /mnt/rootfs mkinitfs -c /etc/mkinitfs/mkinitfs.conf -b / $(ls /mnt/rootfs/lib/modules/ | head -1)
+        chroot /mnt/rootfs mkinitfs $(ls /mnt/rootfs/lib/modules/ | head -1)
 
-        extlinux --install /mnt/rootfs/boot/extlinux
-        dd if=/mnt/rootfs/usr/share/syslinux/mbr.bin of="$LOOP" bs=440 count=1 conv=notrunc
+        chroot /mnt/rootfs grub-install \
+            --target="$GRUB_TARGET" \
+            --efi-directory=/boot/efi \
+            --boot-directory=/boot \
+            --removable \
+            --no-nvram
 
         sync
         for d in dev/pts dev sys proc; do
             umount /mnt/rootfs/$d
         done
+        umount /mnt/rootfs/boot/efi
         umount /mnt/rootfs
         losetup -d "$LOOP"
         trap - EXIT
@@ -128,5 +182,5 @@ fi
 echo ""
 echo "   Image: $BUILD_DIR/$IMAGE_NAME ($(du -h "$BUILD_DIR/$IMAGE_NAME" | cut -f1))"
 echo ""
-echo "Flash to USB with Etcher, Rufus, or:"
+echo "Flash with Etcher, Rufus, or:"
 echo "   sudo dd if=$BUILD_DIR/$IMAGE_NAME of=/dev/sdX bs=4M conv=fsync status=progress"
