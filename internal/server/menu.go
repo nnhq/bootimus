@@ -286,9 +286,9 @@ func (mb *MenuBuilder) buildKernelBootSection(img *models.Image, encodedFilename
 	}
 
 	switch img.Distro {
-	case "windows":
+	case "windows", "windows7":
 		sb.WriteString("echo Loading Windows boot files via wimboot...\n")
-		sb.WriteString(fmt.Sprintf("kernel %s/wimboot\n", baseURL))
+		sb.WriteString(fmt.Sprintf("kernel %s/wimboot%s\n", baseURL, bootParams))
 		sb.WriteString(fmt.Sprintf("initrd %s/boot/%s/iso/boot/bcd BCD || initrd %s/boot/%s/iso/BOOT/BCD BCD\n", baseURL, cacheDir, baseURL, cacheDir))
 		sb.WriteString(fmt.Sprintf("initrd %s/boot/%s/iso/boot/boot.sdi boot.sdi || initrd %s/boot/%s/iso/BOOT/BOOT.SDI boot.sdi\n", baseURL, cacheDir, baseURL, cacheDir))
 		sb.WriteString(fmt.Sprintf("initrd %s/boot/%s/iso/sources/boot.wim boot.wim || initrd %s/boot/%s/iso/SOURCES/BOOT.WIM boot.wim\n", baseURL, cacheDir, baseURL, cacheDir))
