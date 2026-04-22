@@ -299,7 +299,9 @@ func New(cfg *Config) *Server {
 	globalLogBroadcaster = lb
 
 	tm := tools.NewManager(cfg.Storage, cfg.DataDir)
-	tm.EnsureToolRecords()
+	if err := tm.SeedTools(); err != nil {
+		log.Printf("Tools: Failed to seed tools: %v", err)
+	}
 
 	s := &Server{
 		config: cfg,
@@ -1146,6 +1148,7 @@ func (s *Server) setupAdminInterface(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tools/url", authWrap(adminHandler.UpdateToolURL))
 	mux.HandleFunc("/api/tools/custom", authWrap(adminHandler.CreateCustomTool))
 	mux.HandleFunc("/api/tools/custom/delete", authWrap(adminHandler.DeleteCustomTool))
+	mux.HandleFunc("/api/tools/update", authWrap(adminHandler.UpdateTools))
 
 	mux.HandleFunc("/api/images/extract", authWrap(adminHandler.ExtractImage))
 	mux.HandleFunc("/api/images/extract-progress", authWrap(adminHandler.ExtractProgress))

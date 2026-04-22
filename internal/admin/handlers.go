@@ -1389,6 +1389,30 @@ func (h *Handler) UpdateDistroProfiles(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) UpdateTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendJSON(w, http.StatusMethodNotAllowed, Response{Success: false, Error: "Method not allowed"})
+		return
+	}
+
+	if h.toolsManager == nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: "Tools manager not available"})
+		return
+	}
+
+	added, updated, version, err := h.toolsManager.UpdateFromRemote()
+	if err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	log.Printf("Admin: Tools manifest updated from remote (version: %s, added: %d, updated: %d)", version, added, updated)
+	h.sendJSON(w, http.StatusOK, Response{
+		Success: true,
+		Message: fmt.Sprintf("Updated to version %s (%d added, %d updated)", version, added, updated),
+	})
+}
+
 func checkSanbootCompatibility(distro, filename string) (bool, string) {
 	filenameLower := strings.ToLower(filename)
 

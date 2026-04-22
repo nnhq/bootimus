@@ -2,6 +2,8 @@ package tools
 
 import (
 	"archive/zip"
+	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -16,89 +18,42 @@ import (
 	"bootimus/internal/storage"
 )
 
+//go:embed tools-profiles.json
+var embeddedTools embed.FS
+
+const RemoteToolsURL = "https://raw.githubusercontent.com/garybowers/bootimus/main/tools-profiles.json"
+
 // ToolDefinition defines a built-in tool that can be downloaded and served
 type ToolDefinition struct {
-	Name        string
-	DisplayName string
-	Description string
-	Version     string
-	DownloadURL string // default download URL (user can override in DB)
-	// iPXE boot config
-	KernelPath string // path within extracted dir
-	InitrdPath string // path within extracted dir (empty for single-binary tools)
-	BootParams string // kernel boot parameters (use {{HTTP_URL}} for server URL)
-	BootMethod string // "kernel" (default), "memdisk", or "chain"
-	ArchiveType string // "zip" (default), "bin" (single binary download), "iso"
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+	DownloadURL string `json:"download_url"`
+	KernelPath  string `json:"kernel_path"`
+	InitrdPath  string `json:"initrd_path"`
+	BootParams  string `json:"boot_params"`
+	BootMethod  string `json:"boot_method,omitempty"`
+	ArchiveType string `json:"archive_type,omitempty"`
 }
 
-var BuiltInTools = []ToolDefinition{
-	{
-		Name:        "gparted",
-		DisplayName: "GParted Live",
-		Description: "Partition editor for managing disk partitions",
-		Version:     "1.8.1-2",
-		DownloadURL: "https://downloads.sourceforge.net/project/gparted/gparted-live-stable/1.8.1-2/gparted-live-1.8.1-2-amd64.zip",
-		KernelPath:  "live/vmlinuz",
-		InitrdPath:  "live/initrd.img",
-		BootParams:  "boot=live config components union=overlay username=user noswap noeject vga=788 fetch={{HTTP_URL}}/tools/gparted/live/filesystem.squashfs",
-	},
-	{
-		Name:        "clonezilla",
-		DisplayName: "Clonezilla Live",
-		Description: "Disk cloning and imaging tool",
-		Version:     "3.2.2-5",
-		DownloadURL: "https://downloads.sourceforge.net/project/clonezilla/clonezilla_live_stable/3.2.2-5/clonezilla-live-3.2.2-5-amd64.zip",
-		KernelPath:  "live/vmlinuz",
-		InitrdPath:  "live/initrd.img",
-		BootParams:  "boot=live config components union=overlay username=user noswap noeject vga=788 fetch={{HTTP_URL}}/tools/clonezilla/live/filesystem.squashfs",
-	},
-	{
-		Name:        "memtest86plus",
-		DisplayName: "Memtest86+",
-		Description: "Memory testing and diagnostics",
-		Version:     "7.20",
-		DownloadURL: "https://memtest.org/download/v7.20/mt86plus_7.20.binaries.zip",
-		KernelPath:  "memtest64.bin",
-		InitrdPath:  "",
-		BootParams:  "",
-		BootMethod:  "kernel",
-		ArchiveType: "zip",
-	},
-	{
-		Name:        "systemrescue",
-		DisplayName: "SystemRescue",
-		Description: "Linux rescue toolkit for file recovery, disk repair, and network tools",
-		Version:     "13.00",
-		DownloadURL: "https://downloads.sourceforge.net/project/systemrescuecd/sysresccd-x86/13.00/systemrescue-13.00-amd64.iso",
-		KernelPath:  "sysresccd/boot/x86_64/vmlinuz",
-		InitrdPath:  "sysresccd/boot/intel_ucode.img",
-		BootParams:  "archisobasedir=sysresccd archiso_http_srv={{HTTP_URL}}/tools/systemrescue/ checksum ip=dhcp",
-		ArchiveType: "iso",
-	},
-	{
-		Name:        "shredos",
-		DisplayName: "ShredOS",
-		Description: "Secure disk wiping based on nwipe",
-		Version:     "2025.11_29_0.40",
-		DownloadURL: "https://github.com/PartialVolume/shredos.x86_64/releases/download/v2025.11_29_x86-64_0.40/shredos-2025.11_29_x86-64_v0.40_20260402.img",
-		KernelPath:  "shredos.img",
-		InitrdPath:  "",
-		BootParams:  "",
-		BootMethod:  "memdisk",
-		ArchiveType: "bin",
-	},
-	{
-		Name:        "netbootxyz",
-		DisplayName: "Netboot.xyz",
-		Description: "Chainload into netboot.xyz for hundreds of OS installers and tools",
-		Version:     "2.0.84",
-		DownloadURL: "https://boot.netboot.xyz/ipxe/netboot.xyz.efi",
-		KernelPath:  "netboot.xyz.efi",
-		InitrdPath:  "",
-		BootParams:  "",
-		BootMethod:  "chain",
-		ArchiveType: "bin",
-	},
+type toolsManifest struct {
+	Version string           `json:"version"`
+	Tools   []ToolDefinition `json:"tools"`
+}
+
+var BuiltInTools []ToolDefinition
+
+func init() {
+	data, err := embeddedTools.ReadFile("tools-profiles.json")
+	if err != nil {
+		panic(fmt.Sprintf("tools: failed to read embedded tools-profiles.json: %v", err))
+	}
+	var m toolsManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		panic(fmt.Sprintf("tools: failed to parse embedded tools-profiles.json: %v", err))
+	}
+	BuiltInTools = m.Tools
 }
 
 type DownloadProgress struct {
@@ -110,10 +65,11 @@ type DownloadProgress struct {
 }
 
 type Manager struct {
-	store      storage.Storage
-	dataDir    string
-	progressMu sync.RWMutex
-	progress   map[string]*DownloadProgress
+	store              storage.Storage
+	dataDir            string
+	progressMu         sync.RWMutex
+	progress           map[string]*DownloadProgress
+	DisableRemoteCheck bool
 }
 
 func NewManager(store storage.Storage, dataDir string) *Manager {
@@ -153,36 +109,113 @@ func GetDefinition(name string) *ToolDefinition {
 	return nil
 }
 
-// EnsureToolRecords makes sure all built-in tools have database records
-func (m *Manager) EnsureToolRecords() error {
-	for _, def := range BuiltInTools {
+// SeedTools loads the embedded manifest into BuiltInTools and the database on startup.
+// Built-in tool records are refreshed from the manifest (DownloadURL, KernelPath, BootParams,
+// etc.). User-facing mutable state — Enabled, Downloaded, Order — is preserved. Custom tools
+// (Custom == true) are never touched.
+func (m *Manager) SeedTools() error {
+	data, err := embeddedTools.ReadFile("tools-profiles.json")
+	if err != nil {
+		return fmt.Errorf("failed to read embedded tools manifest: %w", err)
+	}
+
+	var mnf toolsManifest
+	if err := json.Unmarshal(data, &mnf); err != nil {
+		return fmt.Errorf("failed to parse embedded tools manifest: %w", err)
+	}
+
+	added, updated := m.applyManifest(mnf)
+	if added+updated > 0 {
+		log.Printf("Tools: Seeded/updated %d tools (version: %s)", added+updated, mnf.Version)
+	} else {
+		log.Printf("Tools: %d tools loaded (version: %s)", len(mnf.Tools), mnf.Version)
+	}
+	return nil
+}
+
+// UpdateFromRemote fetches the latest manifest from GitHub and updates the database.
+// Built-in tool records are overwritten; custom tools are never touched.
+func (m *Manager) UpdateFromRemote() (added int, updated int, version string, err error) {
+	if m.DisableRemoteCheck {
+		return 0, 0, "", fmt.Errorf("remote tool updates are disabled")
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(RemoteToolsURL)
+	if err != nil {
+		return 0, 0, "", fmt.Errorf("failed to fetch remote tools manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, "", fmt.Errorf("remote tools manifest returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var mnf toolsManifest
+	if err := json.Unmarshal(body, &mnf); err != nil {
+		return 0, 0, "", fmt.Errorf("failed to parse remote tools manifest: %w", err)
+	}
+
+	added, updated = m.applyManifest(mnf)
+	log.Printf("Tools: Remote update complete (version: %s, added: %d, updated: %d)", mnf.Version, added, updated)
+	return added, updated, mnf.Version, nil
+}
+
+// applyManifest refreshes BuiltInTools and the DB records for all built-in tools in the
+// manifest. User-set fields (Enabled, Downloaded, Order) are preserved. Custom tools are
+// never modified.
+func (m *Manager) applyManifest(mnf toolsManifest) (added int, updated int) {
+	BuiltInTools = mnf.Tools
+
+	for _, def := range mnf.Tools {
 		existing, err := m.store.GetBootTool(def.Name)
 		if err != nil {
-			// Create new record with default URL
 			tool := &models.BootTool{
 				Name:        def.Name,
 				DisplayName: def.DisplayName,
 				Description: def.Description,
 				Version:     def.Version,
-				Enabled:     false,
-				Downloaded:  m.IsDownloaded(def.Name),
 				DownloadURL: def.DownloadURL,
+				KernelPath:  def.KernelPath,
+				InitrdPath:  def.InitrdPath,
+				BootParams:  def.BootParams,
+				BootMethod:  def.BootMethod,
+				ArchiveType: def.ArchiveType,
+				Downloaded:  m.IsDownloaded(def.Name),
 			}
 			if err := m.store.SaveBootTool(tool); err != nil {
-				return fmt.Errorf("failed to create tool record for %s: %w", def.Name, err)
+				log.Printf("Tools: Failed to seed %s: %v", def.Name, err)
+				continue
 			}
-		} else {
-			// Update display info but preserve user's custom URL if set
-			existing.DisplayName = def.DisplayName
-			existing.Description = def.Description
-			existing.Downloaded = m.IsDownloaded(def.Name)
-			if existing.DownloadURL == "" {
-				existing.DownloadURL = def.DownloadURL
-			}
-			m.store.SaveBootTool(existing)
+			added++
+			continue
 		}
+
+		if existing.Custom {
+			continue
+		}
+
+		existing.DisplayName = def.DisplayName
+		existing.Description = def.Description
+		existing.Version = def.Version
+		existing.DownloadURL = def.DownloadURL
+		existing.KernelPath = def.KernelPath
+		existing.InitrdPath = def.InitrdPath
+		existing.BootParams = def.BootParams
+		existing.BootMethod = def.BootMethod
+		existing.ArchiveType = def.ArchiveType
+		existing.Downloaded = m.IsDownloaded(def.Name)
+		if err := m.store.SaveBootTool(existing); err != nil {
+			log.Printf("Tools: Failed to update %s: %v", def.Name, err)
+			continue
+		}
+		updated++
 	}
-	return nil
+	return added, updated
 }
 
 // IsDownloaded checks if a tool's files exist on disk

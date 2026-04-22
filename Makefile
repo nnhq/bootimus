@@ -85,6 +85,7 @@ test-appliance:
 
 sync-profiles:
 	@cp distro-profiles.json internal/profiles/distro-profiles.json
+	@cp tools-profiles.json internal/tools/tools-profiles.json
 
 build: sync-profiles
 	@echo "Building bootimus $(VERSION)..."

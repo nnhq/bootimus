@@ -468,7 +468,7 @@ func (e *Extractor) detectWindowsUnified(reader FileSystemReader) (*BootFiles, e
 }
 
 func (e *Extractor) cacheBootFilesUnified(files *BootFiles, reader FileSystemReader, isoPath string) error {
-	isoBase := strings.TrimSuffix(filepath.Base(isoPath), filepath.Ext(isoPath))
+	isoBase := relativeISOBase(e.dataDir, isoPath)
 	bootFilesDir := filepath.Join(e.dataDir, isoBase)
 
 	if err := os.MkdirAll(bootFilesDir, 0755); err != nil {

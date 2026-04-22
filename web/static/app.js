@@ -2264,6 +2264,21 @@ async function updateProfilesFromRemote() {
     }
 }
 
+async function updateToolsFromRemote() {
+    try {
+        const res = await authFetch(`${API_BASE}/tools/update`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(data.message || 'Tools updated', 'success');
+            loadTools();
+        } else {
+            showNotification(data.error || 'Update failed', 'error');
+        }
+    } catch (err) {
+        showNotification('Update failed: ' + err.message, 'error');
+    }
+}
+
 async function loadTools() {
     try {
         const res = await authFetch(`${API_BASE}/tools`);
