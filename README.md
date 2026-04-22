@@ -15,6 +15,7 @@ I've used Claude CLI to help with some parts of this project - mostly making the
 - **Single binary, zero config**: Everything bundled - bootloaders, web UI, database. Just run it
 - **Standalone PXE**: Built-in proxyDHCP responder lets Bootimus drive PXE on any LAN without touching the existing DHCP server
 - **50+ distro support**: Automatic kernel/initrd extraction with a generic fallback scanner for unknown ISOs
+- **Unattended Windows install** (opt-in): PXE-boot Windows 10/11 end-to-end — Bootimus hosts the install media over SMB and auto-launches `setup.exe`. Requires `samba` on the host (bundled in the Docker image)
 - **Built-in diagnostic tools**: GParted, Clonezilla, Memtest86+, SystemRescue, ShredOS, Netboot.xyz - one-click download and enable from the admin UI
 - **Custom tools**: Add your own PXE-bootable tools with configurable boot methods (kernel, chain, memdisk)
 - **Per-client access control**: Assign specific images per MAC address, toggle public image visibility per client
@@ -143,7 +144,8 @@ The built-in set is always available as a fallback. Files not present in the act
 - openSUSE, NixOS, Alpine, Gentoo, Void, Slackware, Solus, Tiny Core, Clear Linux
 
 ### Other
-- FreeBSD, Windows (via wimboot)
+- FreeBSD
+- **Windows 10/11** (via wimboot) — optional unattended install via SMB (see the [Windows Unattended Install](#windows-unattended-install---windows-smb) section). Needs `samba` on the host if enabled.
 
 For distributions not in this list, the **generic boot scanner** automatically walks the ISO filesystem to find kernel and initrd files and attempts to extract boot parameters from syslinux/grub configuration files.
 
@@ -165,6 +167,68 @@ data/isos/
 ```
 
 Groups are auto-created on startup and when scanning for ISOs. They can also be managed manually via the admin UI.
+
+## Windows Unattended Install (`--windows-smb`)
+
+Off by default. When enabled, bootimus starts an isolated `smbd` child process that exposes each extracted Windows ISO as a read-only guest SMB share, and patches the WinPE `boot.wim` so `setup.exe` auto-mounts that share and runs — no manual `net use` from the WinPE prompt, no keyboard input after PXE.
+
+### Dependency
+
+This feature requires **Samba** on the host. The Docker image ships `samba` out of the box. Standalone Linux users install it manually:
+
+```bash
+# Debian / Ubuntu
+sudo apt install samba
+
+# Arch
+sudo pacman -S samba
+
+# Fedora / RHEL
+sudo dnf install samba
+```
+
+If `smbd` isn't in `PATH`, the feature self-disables with a clear log line and the rest of bootimus runs normally — nothing else depends on samba.
+
+### Additional requirements
+
+- `wimlib-imagex` (already required for Windows driver injection).
+- Port 445 reachable from clients. Windows' `net use` ignores non-445 SMB ports, so `--windows-smb-port` is for testing only.
+- If running standalone with `setcap` instead of root, grant `smbd` the same capability so the forked child can bind 445:
+
+  ```bash
+  sudo setcap 'cap_net_bind_service=+eip' /usr/sbin/smbd
+  ```
+
+  (Docker users skip this — the image runs as root.)
+
+### Enabling
+
+```bash
+# Standalone
+./bootimus serve --windows-smb
+
+# Config file (bootimus.yaml)
+windows_smb:
+  enabled: true
+  port: 445
+```
+
+**Docker Compose** — uncomment both the env var and the port mapping in [docker-compose.yml](docker-compose.yml):
+
+```yaml
+services:
+  bootimus:
+    environment:
+      BOOTIMUS_WINDOWS_SMB_ENABLED: "true"
+    ports:
+      - "445:445/tcp"
+```
+
+### Admin UI
+
+- **Settings tab** shows live SMB status: `Enabled (N shares, port 445)`, `Disabled`, or `Requested but unavailable` if `smbd` is missing.
+- Patched Windows ISOs get an **SMB** chip in the image list.
+- The image-properties panel gains a **Patch SMB** / **Re-patch SMB** button for applying (or re-applying) the boot.wim patch without re-extracting.
 
 ## Roadmap
 
@@ -289,47 +353,6 @@ docker run --cap-add NET_BIND_SERVICE ...
 # Or use a non-privileged TFTP port
 ./bootimus serve --tftp-port 6969
 ```
-
-### Windows Unattended Install (`--windows-smb`)
-
-Off by default. When enabled, bootimus starts an isolated `smbd` child process that exposes each extracted Windows ISO as a read-only guest SMB share, and patches the WinPE `boot.wim` so `setup.exe` auto-mounts that share and runs — no manual `net use` from the WinPE prompt.
-
-Requirements:
-- `smbd` on PATH (`apt install samba` / `pacman -S samba`). The Docker image ships it. If missing, the feature self-disables with a clear log line — bootimus still starts.
-- `wimlib-imagex` (already required for Windows driver injection).
-- Port 445 reachable from clients. Windows' `net use` ignores non-445 SMB ports, so `--windows-smb-port` is for testing only.
-- If you're running standalone with `setcap` instead of root, grant `smbd` the same capability so the forked child can bind 445:
-
-  ```bash
-  sudo setcap 'cap_net_bind_service=+eip' /usr/sbin/smbd
-  ```
-
-  (Docker users skip this — the image runs as root.)
-
-Enable it:
-
-```bash
-# Standalone
-./bootimus serve --windows-smb
-
-# Config file (bootimus.yaml)
-windows_smb:
-  enabled: true
-  port: 445
-```
-
-Docker Compose — uncomment both the env var and the port mapping in [docker-compose.yml](docker-compose.yml):
-
-```yaml
-services:
-  bootimus:
-    environment:
-      BOOTIMUS_WINDOWS_SMB_ENABLED: "true"
-    ports:
-      - "445:445/tcp"
-```
-
-Per-image state is shown with an **SMB** chip in the image list. The image-properties panel gains a **Patch SMB** button for re-running the patch on an already-extracted image (useful after enabling the flag, or if the first patch failed).
 
 ### Client Not Booting / No PXE Offer
 
