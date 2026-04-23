@@ -1,3 +1,5 @@
+![Bootimus Logo](logos/bootimus_logo_none_bg.png)
+
 # Bootimus - Modern PXE/HTTP Boot Server
 
 **A production-ready, self-contained PXE and HTTP boot server** written in Go with embedded iPXE bootloaders, SQLite/PostgreSQL support, and a full-featured web admin interface. Deploy in seconds with a single binary or Docker container.
