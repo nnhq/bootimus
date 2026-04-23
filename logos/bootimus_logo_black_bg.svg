@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="36" viewBox="0 0 108 36">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@700&amp;display=swap');
+    </style>
+  </defs>
+  <rect width="108" height="36" rx="2" fill="#000000"/>
+  <text
+    font-family="'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+    font-size="15"
+    font-weight="700"
+    letter-spacing="-0.3"
+    y="23"
+    x="10">
+    <tspan fill="#ffb000">[</tspan><tspan fill="#e8e6e3">bootimus</tspan><tspan fill="#ffb000">]</tspan>
+  </text>
+</svg>
